@@ -1257,7 +1257,9 @@ def setup(script_directory, package_name = "", build_type = "", build_dir = ""):
     os.makedirs(dest_dir, exist_ok=True)  # Ensure destination directory exists
     shutil.copy2(src_file, dest_dir)
 
-    shutil.copy2(Path(script_directory)/'templates/install_dependencies.sh', Path(script_directory)/'install/install_dependencies.sh')
+    os.makedirs(Path(script_directory) / 'install', exist_ok=True)
+    shutil.copy2(Path(script_directory) / 'templates/install_dependencies.sh',
+                 Path(script_directory) / 'install/install_dependencies.sh')
 
     # install generated files
     shutil.copytree(Path(script_directory) / "generated",
@@ -1878,14 +1880,25 @@ def manage_git_repos(pull_mode, origin = "origin"):
         for repo in all_results:
             print(f"{repo['name']:<{max_name}} | {repo['branch']:<{max_branch}} | {repo['changes']:<{max_changes}} | {repo['status']}")
 
+
 def list_all_available_packages(script_directory: str):
     """
     Scans all repository.yaml files, finds all available packages, and lists
-    their most recent release versions from GitHub.
+    their most recent release versions that have a valid asset for the current system.
     """
-    print("🔍 Finding all available packages and their latest versions...")
+    print("🔍 Finding all available packages and their latest versions with compatible assets...")
     script_dir_path = Path(script_directory)
     all_repositories = {}
+
+    # --- Get System Info for Asset Matching ---
+    try:
+        os_type = platform.freedesktop_os_release()['ID']
+        architecture = platform.machine()
+        os_version = platform.freedesktop_os_release()['VERSION_ID']
+        print(f"ℹ️  Checking for assets compatible with: {os_type}-{os_version}-{architecture}")
+    except FileNotFoundError:
+        print("❌ Error: Could not determine OS information from /etc/os-release.")
+        return
 
     # Load all repository configurations
     repo_files = sorted(list(set(glob.glob(str(script_dir_path / '*_repositories.yaml')) + glob.glob(str(script_dir_path / 'repositories.yaml')))))
@@ -1899,7 +1912,7 @@ def list_all_available_packages(script_directory: str):
         print("🤷 No packages found in any repositories.yaml files.")
         return
 
-    # --- Load GitHub tokens for API requests ---
+    # Load GitHub tokens for API requests
     tokens = {}
     secrets_path = script_dir_path / 'secrets.yaml'
     if secrets_path.is_file():
@@ -1910,7 +1923,7 @@ def list_all_available_packages(script_directory: str):
     session = requests.Session()
 
     def get_versions_for_package(package_name):
-        """Fetches and processes release versions for a single package."""
+        """Fetches and processes release versions with valid assets for a single package."""
         repo_info = all_repositories.get(package_name)
         if not repo_info or 'url' not in repo_info:
             return package_name, ["(No repository URL found)"]
@@ -1935,24 +1948,34 @@ def list_all_available_packages(script_directory: str):
             if not releases_list:
                 return package_name, ["(No releases found)"]
 
-            versions = []
+            available_versions = []
             for release in releases_list:
                 tag = release.get('tag_name')
-                if tag and not release.get('prerelease'):
-                    try:
-                        versions.append(parse_version(tag))
-                    except InvalidVersion:
-                        continue # Skip malformed tags
+                if not tag or release.get('prerelease'):
+                    continue
+                try:
+                    version_obj = parse_version(tag)
+                    # Construct the expected asset filenames
+                    expected_asset_release = f"{package_name}-{os_type}-{os_version}-{architecture}-release-{tag}.zip"
+                    expected_asset_debug = f"{package_name}-{os_type}-{os_version}-{architecture}-debug-{tag}.zip"
 
-            if not versions:
-                return package_name, ["(No valid version tags found)"]
+                    # Check for a matching asset
+                    for asset in release.get('assets', []):
+                        if asset['name'] == expected_asset_release or asset['name'] == expected_asset_debug:
+                            available_versions.append(version_obj)
+                            break
+                except InvalidVersion:
+                    continue
 
-            # Return the top 3 newest versions
-            sorted_versions = sorted(versions, reverse=True)
+            if not available_versions:
+                return package_name, ["(No compatible assets found)"]
+
+            # Return the top 3 newest versions that have assets
+            sorted_versions = sorted(available_versions, reverse=True)
             return package_name, [str(v) for v in sorted_versions[:3]]
 
-        except requests.exceptions.RequestException as e:
-            return package_name, [f"(API Error: {e.__class__.__name__})"]
+        except requests.exceptions.RequestException:
+            return package_name, ["(API Error)"]
 
     # --- Fetch versions concurrently for all packages ---
     results = {}
@@ -1963,19 +1986,31 @@ def list_all_available_packages(script_directory: str):
             results[name] = version_list
 
     # --- Print the formatted results ---
-    print("Available packages and latest versions:")
+    print("\nAvailable packages and latest versions:")
     for package_name in sorted(results.keys()):
         versions_str = ", ".join(results[package_name])
-        print(f"  - {package_name}: v{versions_str}")
+        print(f"  - {package_name}: {versions_str}")
+
 
 def list_github_release_versions(package_name: str, script_directory: str):
     """
-    Fetches and lists all available release versions of a package from its GitHub repository.
+    Fetches and lists all available release versions of a package from its GitHub
+    repository that have a valid asset for the current system.
     """
-    print(f"🔍 Finding available versions for '{package_name}' from GitHub Releases...")
+    print(f"🔍 Finding available versions with assets for '{package_name}'...")
     script_dir_path = Path(script_directory)
 
-    # --- 1. Load Repository and Secrets Configuration ---
+    # --- 1. Get System Info for Asset Matching ---
+    try:
+        os_type = platform.freedesktop_os_release()['ID']
+        architecture = platform.machine()
+        os_version = platform.freedesktop_os_release()['VERSION_ID']
+        print(f"ℹ️  Checking for assets compatible with: {os_type}-{os_version}-{architecture}")
+    except FileNotFoundError:
+        print("❌ Error: Could not determine OS information from /etc/os-release.")
+        return
+
+    # --- 2. Load Repository and Secrets Configuration ---
     all_repositories = {}
     repo_files = sorted(list(set(glob.glob(str(script_dir_path / '*_repositories.yaml')) + glob.glob(str(script_dir_path / 'repositories.yaml')))))
     for file_path in repo_files:
@@ -1991,13 +2026,13 @@ def list_github_release_versions(package_name: str, script_directory: str):
             secrets = yaml.safe_load(f)
             tokens = secrets.get('gh_tokens', {})
 
-    # --- 2. Find the repository URL for the package ---
+    # --- 3. Find the repository URL for the package ---
     repo_info = all_repositories.get(package_name)
     if not repo_info or 'url' not in repo_info:
         print(f"❌ Error: No repository URL found for '{package_name}' in any repositories.yaml file.")
         return
 
-    # --- 3. Parse Owner/Repo from URL ---
+    # --- 4. Parse Owner/Repo from URL ---
     git_url = repo_info['url']
     match = re.search(r'git@github.com:(.*)/(.*)\.git', git_url)
     if not match:
@@ -2006,7 +2041,7 @@ def list_github_release_versions(package_name: str, script_directory: str):
 
     owner, repo_name = match.groups()
 
-    # --- 4. Query the GitHub API ---
+    # --- 5. Query the GitHub API ---
     session = requests.Session()
     token = tokens.get(owner)
     if token:
@@ -2022,20 +2057,33 @@ def list_github_release_versions(package_name: str, script_directory: str):
             print(f"🤷 No releases found for repository '{owner}/{repo_name}'.")
             return
 
-        # --- 5. Parse, Sort, and Display Versions ---
-        versions = []
+        # --- 6. Parse, Match Assets, Sort, and Display Versions ---
+        available_versions = []
         for release in releases_list:
             tag = release.get('tag_name')
-            # Ignore pre-releases, consistent with the install logic
             if not tag or release.get('prerelease'):
                 continue
+
             try:
-                versions.append(parse_version(tag))
+                version_obj = parse_version(tag)
+                # Construct the expected asset filenames for release and debug builds
+                expected_asset_release = f"{package_name}-{os_type}-{os_version}-{architecture}-release-{tag}.zip"
+                expected_asset_debug = f"{package_name}-{os_type}-{os_version}-{architecture}-debug-{tag}.zip"
+
+                # Check if any asset in this release matches our expected filename
+                for asset in release.get('assets', []):
+                    if asset['name'] == expected_asset_release or asset['name'] == expected_asset_debug:
+                        available_versions.append(version_obj)
+                        break # Found a valid asset, no need to check others in this release
             except InvalidVersion:
-                print(f"⚠️ Warning: Skipping invalid version tag '{tag}'.")
+                continue
+
+        if not available_versions:
+            print(f"🤷 No releases with compatible assets found for '{package_name}'.")
+            return
 
         # Sort from newest to oldest
-        sorted_versions = sorted(versions, reverse=True)
+        sorted_versions = sorted(available_versions, reverse=True)
 
         print(f"Available versions for {package_name} ({owner}/{repo_name}):")
         for v in sorted_versions:
