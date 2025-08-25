@@ -1,0 +1,4 @@
+thread_group: plugin
+is_loadable: true
+is_unloadable: true
+rate: 0

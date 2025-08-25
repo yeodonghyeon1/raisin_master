@@ -1,0 +1,72 @@
+# Created by https://www.toptal.com/developers/gitignore/api/c++
+# Edit at https://www.toptal.com/developers/gitignore?templates=c++
+
+### C++ ###
+# Prerequisites
+*.d
+
+# Compiled Object files
+*.slo
+*.lo
+*.o
+*.obj
+
+# Precompiled Headers
+*.gch
+*.pch
+# Fortran module files
+*.mod
+*.smod
+
+# Executables
+*.exe
+*.out
+*.app
+
+# Vscode
+**/.vscode/**
+**/log/**
+
+# End of https://www.toptal.com/developers/gitignore/api/c++
+
+# Python
+**/__pycache__/
+
+#=> VSCode
+**/.vscode/
+**/.idea/
+**/log/
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.idea/*
+log/*
+
+cmake-*/*
+
+generated/*
+build/*
+install/*
+src/*
+log/*
+git_pull.sh
+
+dependency_graph.png
+dependency_graph.png.png
+
+/CMakeLists.txt
+/CMakeLists_Release.txt
+RAISIN_IGNORE
+imgui.ini
+/RAISIN_BUILD_DIRECTORY
+build-for-release/*
+release/*
+secrets.yaml
+*_repositories.yaml
+
+.cache
+
+temp/*
+storage/*
