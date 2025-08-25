@@ -1848,7 +1848,7 @@ def manage_git_repos(pull_mode, origin = "origin"):
         return
 
     all_results = list(concurrent.futures.ThreadPoolExecutor().map(
-        lambda path: process_repo(path, pull_mode=pull_mode), repo_paths
+        lambda path: process_repo(path, pull_mode=pull_mode, origin=origin), repo_paths
     ))
     all_results.sort(key=lambda x: x['name'])
 
@@ -1967,7 +1967,7 @@ if __name__ == '__main__':
             manage_git_repos(pull_mode=False)
         if sys.argv[2] == 'pull':
             if len(sys.argv) >= 4:
-                manage_git_repos(pull_mode=True, origin=sys.argv[2])
+                manage_git_repos(pull_mode=True, origin=sys.argv[3])
             else:
                 manage_git_repos(pull_mode=True)
 

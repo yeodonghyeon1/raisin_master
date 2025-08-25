@@ -121,8 +121,6 @@ function(raisin_recommended_clang_tidy)
     # Extract major version (digits before first dot)
     string(REGEX MATCH "^[0-9]+" GCC_MAJOR_VERSION "${GCC_FULL_VERSION}")
 
-    message(STATUS "GCC major version: ${GCC_MAJOR_VERSION}")
-
     set(CLANG_TIDY_OPTS
             "${CLANG_TIDY_CHECKS}"
             "-warnings-as-errors=*"
