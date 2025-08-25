@@ -17,7 +17,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 shopt -s nullglob
 
 # Iterate over each *direct* sub-directory
-for subdir in "$SCRIPT_DIR/dependencies"/*/; do
+for subdir in "$SCRIPT_DIR/../src"/*/; do
   installer="${subdir}install_dependencies.sh"
 
   # If the installer script exists, run it
