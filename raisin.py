@@ -1145,6 +1145,11 @@ def deploy_install_packages(script_directory: str):
             if (p / 'generated').is_dir():
                 shutil.copytree(p / 'generated', generated_dest_dir, dirs_exist_ok=True)
 
+            if (p / 'install_dependencies.sh').is_file():
+                os.makedirs(Path(script_directory) / 'install/dependencies' / target_name, exist_ok=True)
+                shutil.copy(p / 'install_dependencies.sh',
+                            Path(script_directory) / 'install/dependencies' / target_name / 'install_dependencies.sh')
+
         if deployed_targets:
             print(f"\n✅ Successfully deployed {len(deployed_targets)} target(s).")
 
@@ -1193,22 +1198,6 @@ def setup(script_directory, package_name = "", build_type = "", build_dir = ""):
     for srv_file in srv_files:
         create_service_file(srv_file, script_directory, Path(srv_file).parent.parent)
 
-
-    # script_dir = os.path.dirname(os.path.abspath(__file__))
-    # install_dir = os.path.join(script_dir, "install")
-    # generated_dir = os.path.join(script_dir, "generated")
-    #
-    # os.makedirs(install_dir, exist_ok=True)
-    #
-    # for project_name in os.listdir(messages_dir):
-    #     dest_dir = os.path.join(install_dir, "include", project_name)
-    #     generated_dest_dir = os.path.join(generated_dir, "include", project_name)
-    #
-    #     if os.path.isdir(src_dir):  # Ensure only directories are copied
-    #         shutil.copytree(src_dir, dest_dir, dirs_exist_ok=True)
-    #         print(f"📂 Copied: {src_dir} -> {dest_dir}")
-    #         shutil.copytree(src_dir, generated_dest_dir, dirs_exist_ok=True)
-
     # Update the CMakeLists.txt based on the template
     update_cmake_file(script_directory, project_directories, build_dir)
 
@@ -1217,6 +1206,7 @@ def setup(script_directory, package_name = "", build_type = "", build_dir = ""):
     if package_name == "": # this means we are not in the release mode
         copy_resource(install_dir)
 
+    os.makedirs(os.path.join(script_directory, 'generated/include'), exist_ok=True)
     shutil.copy(os.path.join(script_directory, 'templates', 'raisin_serialization_base.hpp'), os.path.join(script_directory, 'generated/include'))
 
     # create release tag
@@ -1362,7 +1352,12 @@ def release(script_directory, target, build_type):
                     print(f"❌ Ninja build failed with exit code {e.returncode}:\n{e.stderr}")
                     return
 
-                shutil.copy(Path(script_directory) / 'src' / target / 'release.yaml', Path(install_dir) / 'release.yaml')
+                shutil.copy(Path(script_directory) / 'src' / target / 'release.yaml',
+                            Path(install_dir) / 'release.yaml')
+
+                if (Path(script_directory) / 'src' / target / 'install_dependencies.sh').is_file():
+                    shutil.copy(Path(script_directory) / 'src' / target / 'install_dependencies.sh',
+                                Path(install_dir) / 'install_dependencies.sh')
 
                 # --- NEW: COMPRESS THE INSTALLED DIRECTORY ---
                 print("\n--- Creating Release Archive ---")
