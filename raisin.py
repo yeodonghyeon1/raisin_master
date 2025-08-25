@@ -1706,36 +1706,44 @@ def print_help():
     """Displays the comprehensive help message for the script."""
     script_name = os.path.basename(sys.argv[0])
     print(f"RAISIN Build & Management Tool 🍇")
-    print("="*50)
+    print("="*60)
     print(f"Usage: python {script_name} <command> [options]\n")
 
-    print("Core Commands:")
+    print("## Core Commands")
     print("  setup [target ...]")
     print("    🛠️  Generates message headers and configures the main CMakeLists.txt")
-    print("        for a development build. If specific targets are provided, it")
-    print("        configures only those targets and their dependencies. If no")
-    print("        targets are given, it configures all found projects.\n")
-
+    print("        for a development build. If targets are provided, it configures")
+    print("        only those targets and their dependencies; otherwise, it configures all.")
+    print("-" * 60)
     print("  build <release|debug> [install]")
     print("    ⚙️  Performs a local build in a `cmake-build-*` directory.")
-    print("        You must specify the build type: `release` or `debug`.")
-    print("        Optionally add `install` to install the build to 'install' directory.\n")
-
+    print("        You must specify the build type. Optionally add `install` to")
+    print("        install the build artifacts to the 'install/' directory.")
+    print("-" * 60)
     print("  release <target ...> [build_type]")
     print("    📦 Creates and archives a distributable package for one or more")
-    print("        targets. Packages are placed in the `release/` directory")
-    print("        and automatically uploaded to GitHub Releases if configured.")
-    print("        - `build_type` can be `release` (default) or `debug`.\n")
-
+    print("        targets. Packages are placed in `release/` and uploaded to GitHub.")
+    print("        - `build_type` can be `release` (default) or `debug`.")
+    print("-" * 60)
     print("  install [package_spec ...] [build_type]")
-    print("    🚀 Downloads and installs pre-compiled packages and their")
-    print("        dependencies. If no packages are specified, it scans `src/`.")
+    print("    🚀 Downloads and installs pre-compiled packages and their dependencies.")
     print("        - A `package_spec` can include a version (e.g., `my_pkg>=1.2.3`).")
-    print("        - `build_type` can be `release` (default) or `debug`.\n")
-
+    print("        - `build_type` can be `release` (default) or `debug`.")
+    print("-" * 60)
+    print("## Utility Commands")
+    print("  index versions [package-name]")
+    print("    ℹ️  Lists package versions from GitHub Releases. If a package-name")
+    print("        is provided, it lists versions for that package. If not, it")
+    print("        lists all available packages with their latest versions.")
+    print("-" * 60)
+    print("  git <status|pull> [origin]")
+    print("    🔄 Manages local git repositories in the current directory and `src/`.")
+    print("        - `status`: Fetches and shows the sync status of all repos.")
+    print("        - `pull [origin]`: Pulls changes for all repos from the specified remote (defaults to 'origin').")
+    print("-" * 60)
     print("  help, -h, --help")
     print("    ❓ Displays this help message.")
-    print("-" * 50)
+    print("="*60)
 
 def run_command(command, cwd):
     """A helper function to run a shell command in a specific directory."""
@@ -1870,6 +1878,179 @@ def manage_git_repos(pull_mode, origin = "origin"):
         for repo in all_results:
             print(f"{repo['name']:<{max_name}} | {repo['branch']:<{max_branch}} | {repo['changes']:<{max_changes}} | {repo['status']}")
 
+def list_all_available_packages(script_directory: str):
+    """
+    Scans all repository.yaml files, finds all available packages, and lists
+    their most recent release versions from GitHub.
+    """
+    print("🔍 Finding all available packages and their latest versions...")
+    script_dir_path = Path(script_directory)
+    all_repositories = {}
+
+    # Load all repository configurations
+    repo_files = sorted(list(set(glob.glob(str(script_dir_path / '*_repositories.yaml')) + glob.glob(str(script_dir_path / 'repositories.yaml')))))
+    for file_path in repo_files:
+        with open(file_path, 'r') as f:
+            repo_data = yaml.safe_load(f)
+            if repo_data:
+                all_repositories.update(repo_data)
+
+    if not all_repositories:
+        print("🤷 No packages found in any repositories.yaml files.")
+        return
+
+    # --- Load GitHub tokens for API requests ---
+    tokens = {}
+    secrets_path = script_dir_path / 'secrets.yaml'
+    if secrets_path.is_file():
+        with open(secrets_path, 'r') as f:
+            secrets = yaml.safe_load(f)
+            tokens = secrets.get('gh_tokens', {})
+
+    session = requests.Session()
+
+    def get_versions_for_package(package_name):
+        """Fetches and processes release versions for a single package."""
+        repo_info = all_repositories.get(package_name)
+        if not repo_info or 'url' not in repo_info:
+            return package_name, ["(No repository URL found)"]
+
+        git_url = repo_info['url']
+        match = re.search(r'git@github.com:(.*)/(.*)\.git', git_url)
+        if not match:
+            return package_name, ["(Could not parse repository URL)"]
+
+        owner, repo_name = match.groups()
+        token = tokens.get(owner)
+        headers = {'Accept': 'application/vnd.github.v3+json'}
+        if token:
+            headers['Authorization'] = f'token {token}'
+
+        try:
+            api_url = f"https://api.github.com/repos/{owner}/{repo_name}/releases"
+            response = session.get(api_url, headers=headers, timeout=10)
+            response.raise_for_status()
+            releases_list = response.json()
+
+            if not releases_list:
+                return package_name, ["(No releases found)"]
+
+            versions = []
+            for release in releases_list:
+                tag = release.get('tag_name')
+                if tag and not release.get('prerelease'):
+                    try:
+                        versions.append(parse_version(tag))
+                    except InvalidVersion:
+                        continue # Skip malformed tags
+
+            if not versions:
+                return package_name, ["(No valid version tags found)"]
+
+            # Return the top 3 newest versions
+            sorted_versions = sorted(versions, reverse=True)
+            return package_name, [str(v) for v in sorted_versions[:3]]
+
+        except requests.exceptions.RequestException as e:
+            return package_name, [f"(API Error: {e.__class__.__name__})"]
+
+    # --- Fetch versions concurrently for all packages ---
+    results = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        future_to_package = {executor.submit(get_versions_for_package, name): name for name in all_repositories.keys()}
+        for future in concurrent.futures.as_completed(future_to_package):
+            name, version_list = future.result()
+            results[name] = version_list
+
+    # --- Print the formatted results ---
+    print("Available packages and latest versions:")
+    for package_name in sorted(results.keys()):
+        versions_str = ", ".join(results[package_name])
+        print(f"  - {package_name}: v{versions_str}")
+
+def list_github_release_versions(package_name: str, script_directory: str):
+    """
+    Fetches and lists all available release versions of a package from its GitHub repository.
+    """
+    print(f"🔍 Finding available versions for '{package_name}' from GitHub Releases...")
+    script_dir_path = Path(script_directory)
+
+    # --- 1. Load Repository and Secrets Configuration ---
+    all_repositories = {}
+    repo_files = sorted(list(set(glob.glob(str(script_dir_path / '*_repositories.yaml')) + glob.glob(str(script_dir_path / 'repositories.yaml')))))
+    for file_path in repo_files:
+        with open(file_path, 'r') as f:
+            repo_data = yaml.safe_load(f)
+            if repo_data:
+                all_repositories.update(repo_data)
+
+    tokens = {}
+    secrets_path = script_dir_path / 'secrets.yaml'
+    if secrets_path.is_file():
+        with open(secrets_path, 'r') as f:
+            secrets = yaml.safe_load(f)
+            tokens = secrets.get('gh_tokens', {})
+
+    # --- 2. Find the repository URL for the package ---
+    repo_info = all_repositories.get(package_name)
+    if not repo_info or 'url' not in repo_info:
+        print(f"❌ Error: No repository URL found for '{package_name}' in any repositories.yaml file.")
+        return
+
+    # --- 3. Parse Owner/Repo from URL ---
+    git_url = repo_info['url']
+    match = re.search(r'git@github.com:(.*)/(.*)\.git', git_url)
+    if not match:
+        print(f"❌ Error: Could not parse GitHub owner/repo from URL '{git_url}'.")
+        return
+
+    owner, repo_name = match.groups()
+
+    # --- 4. Query the GitHub API ---
+    session = requests.Session()
+    token = tokens.get(owner)
+    if token:
+        session.headers.update({'Authorization': f'token {token}', 'Accept': 'application/vnd.github.v3+json'})
+
+    try:
+        api_url = f"https://api.github.com/repos/{owner}/{repo_name}/releases"
+        response = session.get(api_url)
+        response.raise_for_status()
+        releases_list = response.json()
+
+        if not releases_list:
+            print(f"🤷 No releases found for repository '{owner}/{repo_name}'.")
+            return
+
+        # --- 5. Parse, Sort, and Display Versions ---
+        versions = []
+        for release in releases_list:
+            tag = release.get('tag_name')
+            # Ignore pre-releases, consistent with the install logic
+            if not tag or release.get('prerelease'):
+                continue
+            try:
+                versions.append(parse_version(tag))
+            except InvalidVersion:
+                print(f"⚠️ Warning: Skipping invalid version tag '{tag}'.")
+
+        # Sort from newest to oldest
+        sorted_versions = sorted(versions, reverse=True)
+
+        print(f"Available versions for {package_name} ({owner}/{repo_name}):")
+        for v in sorted_versions:
+            print(f"  {v}")
+
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == 404:
+            print(f"❌ Error: Repository '{owner}/{repo_name}' not found on GitHub or you lack permissions.")
+        else:
+            print(f"❌ HTTP Error fetching release data: {e}")
+    except requests.exceptions.RequestException as e:
+        print(f"❌ Network error: {e}")
+    except Exception as e:
+        print(f"❌ An unexpected error occurred: {e}")
+
 
 if __name__ == '__main__':
     script_directory = os.path.dirname(os.path.realpath(__file__))
@@ -1944,6 +2125,20 @@ if __name__ == '__main__':
                     print(f"--> Releasing target: {target}")
                     release(script_directory, target, build_type)
                 print("All targets released.")
+
+    elif sys.argv[1] == 'index':
+        if len(sys.argv) >= 3 and sys.argv[2] == 'versions':
+            # Case 1: Package name is provided, list its versions
+            if len(sys.argv) == 4:
+                package_name = sys.argv[3]
+                list_github_release_versions(package_name, script_directory)
+            # Case 2: No package name, list all available packages
+            elif len(sys.argv) == 3:
+                list_all_available_packages(script_directory)
+            else:
+                print("❌ Error: Invalid 'index versions' command. Provide zero or one package name.")
+        else:
+            print("❌ Error: Invalid 'index' command. Use: index versions [package-name]")
 
     elif sys.argv[1] == 'install':
         # Set default build type
