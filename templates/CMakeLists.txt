@@ -55,10 +55,6 @@ file(WRITE "${OUTPUT_FILE}" "${CMAKE_BINARY_DIR}\n")
 # Display a message in the console
 message(STATUS "Build directory saved to ${OUTPUT_FILE}")
 
-# Add the library target
-raisin_find_package(raisim CONFIG REQUIRED)
-find_package(Eigen3 REQUIRED)
-
 install(DIRECTORY generated/include/
         DESTINATION include  # where to install the headers
         FILES_MATCHING PATTERN "*.hpp"     # only install .hpp files
