@@ -352,10 +352,10 @@ def find_interface_files(script_directory, search_directories, interface_types, 
                 dirs.clear()
                 continue
 
-            for dir in dirs:
-                if (search_path / dir / 'include').is_dir():
-                    shutil.copytree(search_path / dir / 'include',
-                                    generated_dest_dir / dir / 'include', dirs_exist_ok=True)
+            if (Path(root) / 'include').is_dir():
+                if (Path(root) / 'msg').is_dir() or (Path(root) / 'srv').is_dir():
+                    shutil.copytree(Path(root) / 'include',
+                                    generated_dest_dir, dirs_exist_ok=True)
 
             # The name of the directory we are currently in (e.g., 'msg', 'srv')
             current_dir_name = os.path.basename(root)
