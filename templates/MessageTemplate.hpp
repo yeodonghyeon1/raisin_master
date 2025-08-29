@@ -21,6 +21,13 @@ namespace @@PROJECT_NAME@@::msg {
 
 class @@MESSAGE_NAME@@ {
 public:
+
+bool operator==(const @@MESSAGE_NAME@@& other) const {
+  return true
+    @@EQUAL_BUFFER_MEMBERS@@
+  ;
+}
+
 inline void setBuffer(std::vector<unsigned char> &buffer) const {
   @@SET_BUFFER_MEMBERS@@
 }
