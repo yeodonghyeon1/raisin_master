@@ -136,27 +136,33 @@ def create_service_file(srv_file, script_directory, project_directory):
 
     request_set_buffer_member_string = ""
     request_get_buffer_member_string = ""
+    request_equal_buffer_member_string = ""
     response_set_buffer_member_string = ""
     response_get_buffer_member_string = ""
+    response_equal_buffer_member_string = ""
 
     for bm in request_buffer_members:
         request_set_buffer_member_string += f"::raisin::setBuffer(buffer, {bm});\n"
         request_get_buffer_member_string += f"temp = ::raisin::getBuffer(temp, {bm});\n"
+        request_equal_buffer_member_string += f"&& this->{bm} == other.{bm} \n"
 
     for bm in response_buffer_members:
         response_set_buffer_member_string += f"::raisin::setBuffer(buffer, {bm});\n"
         response_get_buffer_member_string += f"temp = ::raisin::getBuffer(temp, {bm});\n"
+        response_equal_buffer_member_string += f"&& this->{bm} == other.{bm} \n"
 
     service_content = service_content.replace('@@REQUEST_SET_BUFFER_MEMBERS@@', request_set_buffer_member_string)
     modified_request_set_buffer_member_string = "\n".join("buffer = " + line for line in request_set_buffer_member_string.splitlines())
     service_content = service_content.replace('@@REQUEST_SET_BUFFER_MEMBERS2@@', modified_request_set_buffer_member_string)
     service_content = service_content.replace('@@REQUEST_GET_BUFFER_MEMBERS@@', request_get_buffer_member_string)
+    service_content = service_content.replace('@@REQUEST_EQUAL_BUFFER_MEMBERS@@', request_equal_buffer_member_string)
     service_content = service_content.replace('@@REQUEST_BUFFER_SIZE@@', "\n  ".join(request_buffer_size))
 
     service_content = service_content.replace('@@RESPONSE_SET_BUFFER_MEMBERS@@', response_set_buffer_member_string)
     modified_response_set_buffer_member_string = "\n".join("buffer = " + line for line in response_set_buffer_member_string.splitlines())
     service_content = service_content.replace('@@RESPONSE_SET_BUFFER_MEMBERS2@@', modified_response_set_buffer_member_string)
     service_content = service_content.replace('@@RESPONSE_GET_BUFFER_MEMBERS@@', response_get_buffer_member_string)
+    service_content = service_content.replace('@@RESPONSE_EQUAL_BUFFER_MEMBERS@@', response_equal_buffer_member_string)
     service_content = service_content.replace('@@RESPONSE_BUFFER_SIZE@@', "\n  ".join(response_buffer_size))
 
     service_content = service_content.replace('@@RESPONSE_INCLUDES@@', "\n".join(response_includes))
@@ -824,6 +830,7 @@ def create_message_file(msg_file, script_directory, project_directory):
 
     set_buffer_member_string = ""
     get_buffer_member_string = ""
+    equal_buffer_member_string = ""
 
     for bm in buffer_members:
         set_buffer_member_string += f"::raisin::setBuffer(buffer, {bm});\n"
@@ -831,11 +838,14 @@ def create_message_file(msg_file, script_directory, project_directory):
     for bm in buffer_members:
         get_buffer_member_string += f"temp = ::raisin::getBuffer(temp, {bm});\n"
 
+    for bm in buffer_members:
+        equal_buffer_member_string += f"&& this->{bm} == other.{bm} \n"
+
     message_content = message_content.replace('@@SET_BUFFER_MEMBERS@@', set_buffer_member_string)
     modified_set_buffer_member_string = "\n".join("buffer = " + line for line in set_buffer_member_string.splitlines())
     message_content = message_content.replace('@@SET_BUFFER_MEMBERS2@@', modified_set_buffer_member_string)
-
     message_content = message_content.replace('@@GET_BUFFER_MEMBERS@@', get_buffer_member_string)
+    message_content = message_content.replace('@@EQUAL_BUFFER_MEMBERS@@', equal_buffer_member_string)
 
     # Create the message file in the <script_directory>/include/<project_directory>/msg directory
     snake_str = re.sub(r'(?<!^)(?=[A-Z][a-z]|(?<=[a-z])[A-Z]|(?<=[0-9])(?=[A-Z]))', '_', message_name).lower()

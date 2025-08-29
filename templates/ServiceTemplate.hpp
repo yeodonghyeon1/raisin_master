@@ -28,6 +28,12 @@ inline static std::string getDataType() {
 
 class Request {
  public:
+  bool operator==(const Request& other) const {
+    return true
+    @@REQUEST_EQUAL_BUFFER_MEMBERS@@
+    ;
+  }
+
   inline void setBuffer([[maybe_unused]] std::vector<unsigned char> &buffer) const {
     @@REQUEST_SET_BUFFER_MEMBERS@@
   };
@@ -64,6 +70,12 @@ class Request {
 
 class Response {
  public:
+  bool operator==(const Response& other) const {
+    return true
+    @@RESPONSE_EQUAL_BUFFER_MEMBERS@@
+    ;
+  }
+
   inline void setBuffer([[maybe_unused]] std::vector<unsigned char> &buffer) const {
     @@RESPONSE_SET_BUFFER_MEMBERS@@
   };
