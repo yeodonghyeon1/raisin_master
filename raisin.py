@@ -6,18 +6,16 @@ import sys
 from collections import defaultdict
 import subprocess
 from pathlib import Path
-from platform import architecture
-from typing import Union
 import glob
 import yaml
 import fnmatch
-from urllib.parse import urlparse
 import concurrent.futures
 
 from packaging.version import parse as parse_version, InvalidVersion
 import zipfile
 from packaging.specifiers import SpecifierSet
 import requests
+import json
 
 
 # Mapping of ROS message types to corresponding C++ types
@@ -1269,13 +1267,10 @@ def setup(script_directory, package_name = "", build_type = "", build_dir = ""):
 
 def release(script_directory, target, build_type):
     """
-    Checks for a target subdirectory in '<script_directory>/src',
-    reads its 'release.yaml', and then builds the project using all available CPU cores.
-
-    Args:
-        script_directory (str): The absolute path to the script's root directory.
-        target (str): The name of the target subdirectory to check for.
+    Builds the project, creates a release archive, and uploads it to GitHub,
+    prompting for overwrite if the asset already exists.
     """
+    # --- This initial part of the function remains the same ---
     target_dir = os.path.join(script_directory, 'src', target)
 
     os_type = platform.freedesktop_os_release()['ID']
@@ -1284,7 +1279,6 @@ def release(script_directory, target, build_type):
 
     install_dir = f"{script_directory}/release/install/{target}/{os_type}/{os_version}/{architecture}/{build_type}"
 
-    # Check if target directory exists
     if not os.path.isdir(target_dir):
         print(f"❌ Error: Target '{target}' not found in '{os.path.join(script_directory, 'src')}'.")
         return
@@ -1292,7 +1286,6 @@ def release(script_directory, target, build_type):
     release_file_path = os.path.join(target_dir, 'release.yaml')
     repository_file_path = os.path.join(script_directory, 'repositories.yaml')
 
-    # Check if release.yaml exists
     if not os.path.isfile(release_file_path):
         print(f"❌ Error: 'release.yaml' not found in '{target_dir}'.")
         return
@@ -1305,179 +1298,123 @@ def release(script_directory, target, build_type):
                 details = yaml.safe_load(file)
                 repositories = yaml.safe_load(repository_file)
 
-                # --- BUILD STEPS NOW INLINED ---
                 print(f"\n--- Setting up build for '{target}' ---")
                 build_dir = Path(script_directory) / "release" / "build" / target
-                delete_directory(build_dir)  # Delete the existing build directory
-                setup(script_directory, package_name = target, build_type=build_type, build_dir = str(build_dir))
+                setup(script_directory, package_name = target, build_type=build_type, build_dir = str(build_dir)) # Assuming setup is defined
                 os.makedirs(build_dir / "build", exist_ok=True)
 
-                # 1. Run CMake
                 print("⚙️  Running CMake...")
-                cmake_command = ["cmake",
-                                 "../../../..",
-                                 "-G Ninja",
-                                 f"-DCMAKE_INSTALL_PREFIX={install_dir}",
-                                 f"-DCMAKE_BUILD_TYPE={build_type}",
-                                 "-DRAISIN_RELEASE_BUILD=ON"]
-                try:
-                    subprocess.run(
-                        cmake_command,
-                        cwd=build_dir / "build",
-                        check=True,
-                        capture_output=True,
-                        text=True
-                    )
-                    print("✅ CMake configuration successful.")
-                except FileNotFoundError:
-                    print("❌ Error: 'cmake' command not found. Is CMake installed and in your PATH?")
-                    return
-                except subprocess.CalledProcessError as e:
-                    print(f"❌ CMake failed with exit code {e.returncode}:\n{e.stderr}")
-                    return
+                cmake_command = ["cmake", "../../../..", "-G Ninja", f"-DCMAKE_INSTALL_PREFIX={install_dir}", f"-DCMAKE_BUILD_TYPE={build_type}", "-DRAISIN_RELEASE_BUILD=ON"]
+                subprocess.run(cmake_command, cwd=build_dir / "build", check=True, capture_output=True, text=True)
+                print("✅ CMake configuration successful.")
 
-                # 2. Build with Ninja, using all available CPU cores
                 print("🛠️  Building with Ninja...")
-
-                # Get the number of CPU cores available on the system
-                core_count = int(os.cpu_count() / 2) or 4 # Fallback to 4 if count is undetermined
+                core_count = int(os.cpu_count() / 2) or 4
                 print(f"🔩 Using {core_count} cores for the build.")
-
-                # Dynamically set the job count '-j' for Ninja
                 build_command = ["ninja", "install", f"-j{core_count}"]
+                subprocess.run(build_command, cwd=build_dir / "build", check=True, capture_output=True, text=True)
+                print(f"✅ Build for '{target}' complete!")
 
-                try:
-                    subprocess.run(
-                        build_command,
-                        cwd=build_dir / "build",
-                        check=True,
-                        capture_output=True,
-                        text=True
-                    )
-                    print(f"✅ Build for '{target}' complete!")
-                except FileNotFoundError:
-                    print("❌ Error: 'ninja' command not found. Is Ninja installed and in your PATH?")
-                    return
-                except subprocess.CalledProcessError as e:
-                    print(f"❌ Ninja build failed with exit code {e.returncode}:\n{e.stderr}")
-                    return
-
-                shutil.copy(Path(script_directory) / 'src' / target / 'release.yaml',
-                            Path(install_dir) / 'release.yaml')
-
+                shutil.copy(Path(script_directory) / 'src' / target / 'release.yaml', Path(install_dir) / 'release.yaml')
                 if (Path(script_directory) / 'src' / target / 'install_dependencies.sh').is_file():
-                    shutil.copy(Path(script_directory) / 'src' / target / 'install_dependencies.sh',
-                                Path(install_dir) / 'install_dependencies.sh')
+                    shutil.copy(Path(script_directory) / 'src' / target / 'install_dependencies.sh', Path(install_dir) / 'install_dependencies.sh')
 
-                # --- NEW: COMPRESS THE INSTALLED DIRECTORY ---
                 print("\n--- Creating Release Archive ---")
-                # 1. Get required information for the filename
                 version = details.get('version', '0.0.0')
-
-                # 2. Define source directory and archive name
                 archive_name_base = f"{target}-{os_type}-{os_version}-{architecture}-{build_type}-v{version}"
-                archive_output_path = os.path.join(install_dir, archive_name_base)
+                release_dir = Path(script_directory) / 'release'
+                archive_file = release_dir / (archive_name_base + '.zip')
+                print(f"📦 Compressing '{install_dir}'...")
+                subprocess.run(['zip', '-r', str(archive_file), '.'], cwd=install_dir, check=True, capture_output=True)
+                print(f"✅ Successfully created archive: {archive_file}")
 
-                try:
-                    print(f"📦 Compressing '{install_dir}'...")
-
-                    # 3. Create the zip archive
-                    try:
-                        release_dir = Path(script_directory) / 'release'
-                        archive_file = release_dir / (archive_name_base + '.zip')
-
-                        subprocess.run(
-                            ['zip', '-r', str(archive_file), '.'],
-                            cwd=install_dir,
-                            check=True,      # Raises an exception if zip fails
-                            capture_output=True # Hides the command's output unless there's an error
-                        )
-
-                        print(f"✅ Successfully created archive: {archive_file}")
-
-                    except FileNotFoundError:
-                        print("❌ ERROR: The 'zip' command is not installed or not in your PATH.")
-                    except subprocess.CalledProcessError as e:
-                        print(f"❌ ERROR: Archiving failed with exit code {e.returncode}.")
-                        print(e.stderr.decode())
-
-                    print(f"✅ Successfully created release archive:\n   {archive_file}")
-
-                except KeyError:
-                    print("❌ Error: Could not find 'release: version:' key path in release.yaml.")
-                except FileNotFoundError:
-                    print(f"❌ Error: Install directory not found at '{install_dir}'. Cannot create archive.")
-                except Exception as e:
-                    print(f"❌ An unexpected error occurred during archiving: {e}")
-
-                # --- NEW: UPLOAD TO GITHUB RELEASE ---
                 secrets_path = os.path.join(script_directory, 'secrets.yaml')
                 if not os.path.isfile(secrets_path):
-                    print("❌ Error: 'secrets.yaml' not found. Cannot authenticate for GitHub upload.")
+                    print("❌ Error: 'secrets.yaml' not found. Cannot upload to GitHub.")
                     return
                 with open(secrets_path, 'r') as secrets_file:
                     secrets = yaml.safe_load(secrets_file)
 
+                print("\n--- Uploading to GitHub Release ---")
+
+                release_info = repositories.get(target)
+                if not (release_info and release_info.get('url')):
+                    print(f"ℹ️ Repository URL for '{target}' not found in 'repositories.yaml'. Skipping GitHub release.")
+                    return
+
+                repo_url = release_info['url']
+                match = re.search(r'git@github\.com:(.*)\.git', repo_url)
+                repo_slug = match.group(1) if match else None
+                if not repo_slug:
+                    print(f"❌ Error: Could not parse repository from URL: {repo_url}")
+                    return
+
+                owner = repo_slug.split('/')[0]
+                token = secrets.get("gh_tokens", {}).get(owner)
+                if not token:
+                    print(f"❌ Error: Token for owner '{owner}' not found in secrets.yaml.")
+                    return
+
+                auth_env = os.environ.copy()
+                auth_env["GH_TOKEN"] = token
+                tag_name = f"v{version}"
+                archive_filename = os.path.basename(archive_file)
+
+                # 1. Check if the release and asset already exist
+                release_exists = True
+                asset_exists = False
                 try:
-                    print("\n--- Uploading to GitHub Release ---")
-                    try:
-                        # 1. Get GitHub info from YAML
-                        release_info = repositories.get(target)
-                        if not release_info:
-                            print(f"ℹ️ {target} in 'repositories.yaml' not found in YAML. Skipping GitHub release.")
-                            return
+                    print(f"Checking status of release '{tag_name}' in '{repo_slug}'...")
+                    list_cmd = ["gh", "release", "view", tag_name, "--repo", repo_slug, "--json", "assets"]
+                    result = subprocess.run(list_cmd, check=True, capture_output=True, text=True, env=auth_env)
+                    release_data = json.loads(result.stdout)
+                    existing_assets = [asset['name'] for asset in release_data.get('assets', [])]
+                    if archive_filename in existing_assets:
+                        asset_exists = True
 
-                        repo_url = release_info.get('url')
-                        if not repo_url:
-                            print("ℹ️ 'release.url' not found in YAML. Skipping GitHub release.")
-                            return
+                except subprocess.CalledProcessError as e:
+                    if "release not found" in e.stderr:
+                        release_exists = False
+                    else:
+                        print(f"❌ Error checking release status: {e.stderr}")
+                        return
 
-                        # 2. Get token from secrets and prepare environment
-                        path = urlparse(repo_url).path
-                        token = secrets.get("gh_tokens").get(path.split(':')[1].split('/')[0])
+                # 2. Decide whether to create, upload, or prompt for overwrite
+                if not release_exists:
+                    print(f"✅ Release '{tag_name}' does not exist. Creating a new one...")
+                    gh_create_cmd = [
+                        "gh", "release", "create", tag_name, str(archive_file),
+                        "--repo", repo_slug, "--title", f"Release {tag_name}",
+                        "--notes", f"Automated release of version {version}."
+                    ]
+                    subprocess.run(gh_create_cmd, check=True, capture_output=True, text=True, env=auth_env)
+                    print(f"✅ Successfully created new release and uploaded '{archive_filename}'.")
+                elif asset_exists:
+                    prompt = input(f"⚠️ Asset '{archive_filename}' already exists. Overwrite? (y/n): ").lower()
+                    if prompt in ['y', 'yes']:
+                        print(f"🚀 Overwriting asset...")
+                        gh_upload_cmd = [
+                            "gh", "release", "upload", tag_name, str(archive_file),
+                            "--repo", repo_slug, "--clobber"
+                        ]
+                        subprocess.run(gh_upload_cmd, check=True, capture_output=True, text=True, env=auth_env)
+                        print(f"✅ Successfully overwrote asset in release '{tag_name}'.")
+                    else:
+                        print(f"🚫 Upload for '{archive_filename}' cancelled by user.")
+                else: # Release exists, but asset does not
+                    print(f"🚀 Uploading new asset to existing release '{tag_name}'...")
+                    gh_upload_cmd = [
+                        "gh", "release", "upload", tag_name, str(archive_file),
+                        "--repo", repo_slug
+                    ]
+                    subprocess.run(gh_upload_cmd, check=True, capture_output=True, text=True, env=auth_env)
+                    print(f"✅ Successfully uploaded asset to release '{tag_name}'.")
 
-                        if not token:
-                            print(f"❌ Error: Token for '{repo_url}' not found in secrets.yaml.")
-                            return
-                        auth_env = os.environ.copy()
-                        auth_env["GH_TOKEN"] = token
-
-                        # 3. Parse repo slug and define release details
-                        match = re.search(r'git@github\.com:(.*)\.git', repo_url)
-                        repo_slug = match.group(1) if match else None
-                        if not repo_slug:
-                            print(f"❌ Error: Could not parse repository from URL: {repo_url}")
-                            return
-                        tag_name = f"v{version}"
-
-                        # 4. Try to upload to an existing release first
-                        print(f"🚀 Checking for existing release '{tag_name}' in '{repo_slug}'...")
-                        try:
-                            gh_upload_cmd = [
-                                "gh", "release", "upload", tag_name, archive_file,
-                                "--repo", repo_slug
-                            ]
-                            subprocess.run(gh_upload_cmd, check=True, capture_output=True, text=True, env=auth_env)
-                            print(f"✅ Successfully uploaded asset to existing release '{tag_name}'.")
-                        # Capture the exception object to inspect its output
-                        except subprocess.CalledProcessError as e:
-                            # Now, try to create the release
-                            print(f"ℹ️ Assuming release '{tag_name}' does not exist. Creating a new one...")
-                            gh_create_cmd = [
-                                "gh", "release", "create", tag_name, archive_file,
-                                "--repo", repo_slug,
-                                "--title", f"{tag_name}",
-                                "--notes", f"Automated release of version {version}.",
-                                "--draft=false"
-                            ]
-                            subprocess.run(gh_create_cmd, check=True, capture_output=True, text=True, env=auth_env)
-                            print(f"✅ Successfully created new release and uploaded asset.")
-                    except Exception as e:
-                        print(f"❌ An error occurred during GitHub upload: {e}")
-
-                except Exception as e:
-                    print(f"🔥 An unexpected top-level error occurred: {e}")
-
+    # Keep your existing exception handling
+    except FileNotFoundError as e:
+        print(f"❌ Command not found: '{e.filename}'. Is the required tool (cmake, ninja, zip, gh) installed and in your PATH?")
+    except subprocess.CalledProcessError as e:
+        print(f"❌ A command failed with exit code {e.returncode}:\n{e.stderr}")
     except yaml.YAMLError as e:
         print(f"🔥 Error parsing YAML file: {e}")
     except Exception as e:
