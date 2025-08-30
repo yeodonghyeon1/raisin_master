@@ -51,7 +51,7 @@ def delete_directory(directory):
     if os.path.exists(directory):
         shutil.rmtree(directory)
 
-def create_service_file(srv_file, script_directory, project_directory):
+def create_service_file(srv_file, script_directory, project_directory, install_dir):
     """
     Create a service file based on the template, replacing the appropriate placeholders.
     The file is saved in <script_directory>/include/<project_directory>/srv.
@@ -67,7 +67,7 @@ def create_service_file(srv_file, script_directory, project_directory):
     # Recreate the directory to ensure it's clean
     os.makedirs(include_project_srv_dir, exist_ok=True)
 
-    destination_file = os.path.join(script_directory, 'install', 'messages', project_name, 'srv', '')
+    destination_file = os.path.join(install_dir, 'messages', project_name, 'srv', '')
     os.makedirs(destination_file, exist_ok=True)
     shutil.copy2(srv_file, destination_file)
 
@@ -625,7 +625,7 @@ def transform_data_type(data_type, project_name):
     else:
         return f"{project_name}::msg::{data_type}", data_type, subproject_path, False
 
-def create_action_file(action_file, script_directory, project_directory):
+def create_action_file(action_file, script_directory, project_directory, install_dir):
     """
     Create a message file based on the template, replacing '@@MESSAGE_NAME@@' with the message file name.
     The file is saved in <script_directory>/include/<project_directory>/msg.
@@ -637,7 +637,7 @@ def create_action_file(action_file, script_directory, project_directory):
 
     # Determine the target directory in include/<project_name>/msg
     include_project_msg_dir = os.path.join(script_directory, 'generated', 'include', project_name, 'action')
-    destination_file = os.path.join(script_directory, 'install', 'messages', project_name, 'action', '')
+    destination_file = os.path.join(install_dir, 'messages', project_name, 'action', '')
     os.makedirs(destination_file, exist_ok=True)
     shutil.copy2(action_file, destination_file)
 
@@ -721,7 +721,7 @@ def create_action_file(action_file, script_directory, project_directory):
     file_path.write_text(feedback_message_content)
 
 
-def create_message_file(msg_file, script_directory, project_directory):
+def create_message_file(msg_file, script_directory, project_directory, install_dir):
     """
     Create a message file based on the template, replacing '@@MESSAGE_NAME@@' with the message file name.
     The file is saved in <script_directory>/include/<project_directory>/msg.
@@ -733,7 +733,7 @@ def create_message_file(msg_file, script_directory, project_directory):
 
     # Determine the target directory in include/<project_name>/msg
     include_project_msg_dir = os.path.join(script_directory, 'generated', 'include', project_name, 'msg')
-    destination_file = os.path.join(script_directory, 'install', 'messages', project_name, 'msg', '')
+    destination_file = os.path.join(install_dir, 'messages', project_name, 'msg', '')
     os.makedirs(destination_file, exist_ok=True)
     shutil.copy2(msg_file, destination_file)
 
@@ -1196,17 +1196,17 @@ def setup(script_directory, package_name = "", build_type = "", build_dir = ""):
 
     # Handle .action files
     for action_file in action_files:
-        create_action_file(action_file, script_directory, Path(action_file).parent.parent)
+        create_action_file(action_file, script_directory, Path(action_file).parent.parent, install_dir)
 
     msg_files, srv_files = find_interface_files(script_directory, [src_dir, 'temp'], ['msg', 'srv'], packages_to_ignore)
 
     # Handle .msg files
     for msg_file in msg_files:
-        create_message_file(msg_file, script_directory, Path(msg_file).parent.parent)
+        create_message_file(msg_file, script_directory, Path(msg_file).parent.parent, install_dir)
 
     # Handle .srv files
     for srv_file in srv_files:
-        create_service_file(srv_file, script_directory, Path(srv_file).parent.parent)
+        create_service_file(srv_file, script_directory, Path(srv_file).parent.parent, install_dir)
 
     # Update the CMakeLists.txt based on the template
     update_cmake_file(script_directory, project_directories, build_dir)
