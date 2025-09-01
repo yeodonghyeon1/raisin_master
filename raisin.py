@@ -6,18 +6,17 @@ import sys
 from collections import defaultdict
 import subprocess
 from pathlib import Path
-from platform import architecture
-from typing import Union
 import glob
 import yaml
 import fnmatch
-from urllib.parse import urlparse
 import concurrent.futures
+from typing import Tuple, Dict
 
 from packaging.version import parse as parse_version, InvalidVersion
 import zipfile
 from packaging.specifiers import SpecifierSet
 import requests
+import json
 
 
 # Mapping of ROS message types to corresponding C++ types
@@ -43,6 +42,11 @@ STRING_TYPES = ['std::string', 'std::u16string']
 
 build_pattern = []
 
+os_type = ""
+architecture = ""
+os_version = ""
+script_directory = ""
+
 def is_root():
     """Check if the current user is root."""
     return os.geteuid() == 0
@@ -51,7 +55,7 @@ def delete_directory(directory):
     if os.path.exists(directory):
         shutil.rmtree(directory)
 
-def create_service_file(srv_file, script_directory, project_directory, install_dir):
+def create_service_file(srv_file, project_directory, install_dir):
     """
     Create a service file based on the template, replacing the appropriate placeholders.
     The file is saved in <script_directory>/include/<project_directory>/srv.
@@ -250,13 +254,11 @@ def process_service_content(content, project_name):
 
     return includes, members, buffer_members, buffer_size
 
-def find_topic_directories(script_directory, search_directories):
+def find_topic_directories(search_directories):
     """
     Search for all subdirectories in <script_directory> containing 'CMakeLists.txt'.
     Return a list of these directories.
     The function will not search further into subdirectories once a 'CMakeLists.txt' file is found.
-
-    :param script_directory: The root directory where the search starts.
     :param search_directories: A list of directories to search (e.g., ['src', 'messages']).
     """
 
@@ -275,16 +277,19 @@ def find_topic_directories(script_directory, search_directories):
 
     return topic_directories
 
-def find_project_directories(script_directory, search_directories, install_dir, packages_to_ignore=[]):
+def find_project_directories(search_directories, install_dir, packages_to_ignore=None):
     """
     Search for all subdirectories in <script_directory> containing 'CMakeLists.txt'.
     Return a list of these directories.
     The function will not search further into subdirectories once a 'CMakeLists.txt' file is found.
 
-    :param script_directory: The root directory where the search starts.
+    :param install_dir:
+    :param packages_to_ignore:
     :param search_directories: A list of directories to search (e.g., ['src', 'messages']).
     """
 
+    if packages_to_ignore is None:
+        packages_to_ignore = []
     project_directories = []
 
     # Walk through the specified directories
@@ -324,7 +329,7 @@ def find_project_directories(script_directory, search_directories, install_dir, 
         
     return project_directories
 
-def find_interface_files(script_directory, search_directories, interface_types, packages_to_ignore=None):
+def find_interface_files(search_directories, interface_types, packages_to_ignore=None):
     """
     Finds ROS interface files (e.g., .action, .msg, .srv) in specified directories.
 
@@ -505,7 +510,7 @@ def topological_sort(graph, keys):
     return keys
 
 
-def update_cmake_file(script_directory, project_directories, cmake_dir):
+def update_cmake_file(project_directories, cmake_dir):
     """
     Generate a new CMakeLists.txt file by adding projects that either match
     the global 'build_pattern' (if not empty) or all projects, including their
@@ -625,7 +630,7 @@ def transform_data_type(data_type, project_name):
     else:
         return f"{project_name}::msg::{data_type}", data_type, subproject_path, False
 
-def create_action_file(action_file, script_directory, project_directory, install_dir):
+def create_action_file(action_file, project_directory, install_dir):
     """
     Create a message file based on the template, replacing '@@MESSAGE_NAME@@' with the message file name.
     The file is saved in <script_directory>/include/<project_directory>/msg.
@@ -667,7 +672,6 @@ def create_action_file(action_file, script_directory, project_directory, install
     action_path = Path(action_file)
     # --- 1. Read the action file ---
     try:
-        print(f"📂 Reading action file: {action_path}")
         action_file_content = action_path.read_text()
     except FileNotFoundError:
         print(f"❌ ERROR: File not found at '{action_path}'. Please check the path.")
@@ -721,7 +725,7 @@ def create_action_file(action_file, script_directory, project_directory, install
     file_path.write_text(feedback_message_content)
 
 
-def create_message_file(msg_file, script_directory, project_directory, install_dir):
+def create_message_file(msg_file, project_directory, install_dir):
     """
     Create a message file based on the template, replacing '@@MESSAGE_NAME@@' with the message file name.
     The file is saved in <script_directory>/include/<project_directory>/msg.
@@ -1055,7 +1059,7 @@ def copy_resource(install_dir):
                 else:
                     shutil.copy2(s, d)
 
-def copy_installers(script_directory, src_dir, install_dir) -> int:
+def copy_installers(src_dir, install_dir) -> int:
     """
     Scan <script_directory>/src/*/ for install_dependencies.sh files and copy
     each one to <script_directory>/install/<subdir>/install_dependencies.sh.
@@ -1090,12 +1094,11 @@ def copy_installers(script_directory, src_dir, install_dir) -> int:
         dst_subdir.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src_installer, dst_subdir / "install_dependencies.sh")
         copied += 1
-        print(f"📂 Copied {src_installer}  ➜  {dst_subdir}")
 
     return copied
 
 
-def deploy_install_packages(script_directory: str):
+def deploy_install_packages():
     """
     Finds and copies packages that match the current system's OS and architecture.
 
@@ -1109,9 +1112,6 @@ def deploy_install_packages(script_directory: str):
     Args:
         script_directory (str): The absolute path to the base directory.
     """
-    os_type = platform.freedesktop_os_release()['ID']
-    architecture = platform.machine()
-    os_version = platform.freedesktop_os_release()['VERSION_ID']
 
     # Create a glob pattern to find all build directories for the current system
     # e.g., .../release/install/*/linux/x86_64/*
@@ -1166,13 +1166,10 @@ def deploy_install_packages(script_directory: str):
     except Exception as e:
         print(f"❌ An error occurred during deployment: {e}")
 
-def setup(script_directory, package_name = "", build_type = "", build_dir = ""):
+def setup(package_name = "", build_type = "", build_dir = ""):
     """
     setup function to find project directories, msg, and srv files and generate message and service files.
     """
-    os_type = platform.freedesktop_os_release()['ID']
-    architecture = platform.machine()
-    os_version = platform.freedesktop_os_release()['VERSION_ID']
 
     if package_name == "":
         src_dir = 'src'
@@ -1190,34 +1187,35 @@ def setup(script_directory, package_name = "", build_type = "", build_dir = ""):
 
     packages_to_ignore = get_packages_to_ignore()
 
-    action_files = find_interface_files(script_directory, [src_dir], ['action'], packages_to_ignore)[0]
+    action_files = find_interface_files([src_dir], ['action'], packages_to_ignore)[0]
 
-    project_directories = find_project_directories(script_directory, [src_dir], install_dir, packages_to_ignore)
+    project_directories = find_project_directories([src_dir], install_dir, packages_to_ignore)
 
     # Handle .action files
     for action_file in action_files:
-        create_action_file(action_file, script_directory, Path(action_file).parent.parent, install_dir)
+        create_action_file(action_file, Path(action_file).parent.parent, install_dir)
 
-    msg_files, srv_files = find_interface_files(script_directory, [src_dir, 'temp'], ['msg', 'srv'], packages_to_ignore)
+    msg_files, srv_files = find_interface_files([src_dir, 'temp'], ['msg', 'srv'], packages_to_ignore)
 
     # Handle .msg files
     for msg_file in msg_files:
-        create_message_file(msg_file, script_directory, Path(msg_file).parent.parent, install_dir)
+        create_message_file(msg_file, Path(msg_file).parent.parent, install_dir)
 
     # Handle .srv files
     for srv_file in srv_files:
-        create_service_file(srv_file, script_directory, Path(srv_file).parent.parent, install_dir)
+        create_service_file(srv_file, Path(srv_file).parent.parent, install_dir)
 
     # Update the CMakeLists.txt based on the template
-    update_cmake_file(script_directory, project_directories, build_dir)
+    update_cmake_file(project_directories, build_dir)
 
-    copy_installers(script_directory, src_dir, install_dir)
+    copy_installers(src_dir, install_dir)
 
     if package_name == "": # this means we are not in the release mode
         copy_resource(install_dir)
 
     os.makedirs(os.path.join(script_directory, 'generated/include'), exist_ok=True)
-    shutil.copy(os.path.join(script_directory, 'templates', 'raisin_serialization_base.hpp'), os.path.join(script_directory, 'generated/include'))
+    shutil.copy(os.path.join(script_directory, 'templates', 'raisin_serialization_base.hpp'),
+                os.path.join(script_directory, 'generated/include'))
 
     # create release tag
     install_release_file = Path(script_directory) / 'install' / "release.txt"
@@ -1265,26 +1263,17 @@ def setup(script_directory, package_name = "", build_type = "", build_dir = ""):
     shutil.copytree(Path(script_directory) / "generated",
                     Path(script_directory) / install_dir / 'generated', dirs_exist_ok=True)
 
-    deploy_install_packages(script_directory)
+    deploy_install_packages()
 
-def release(script_directory, target, build_type):
+def release(target, build_type):
     """
-    Checks for a target subdirectory in '<script_directory>/src',
-    reads its 'release.yaml', and then builds the project using all available CPU cores.
-
-    Args:
-        script_directory (str): The absolute path to the script's root directory.
-        target (str): The name of the target subdirectory to check for.
+    Builds the project, creates a release archive, and uploads it to GitHub,
+    prompting for overwrite if the asset already exists.
     """
+    # --- This initial part of the function remains the same ---
     target_dir = os.path.join(script_directory, 'src', target)
-
-    os_type = platform.freedesktop_os_release()['ID']
-    architecture = platform.machine()
-    os_version = platform.freedesktop_os_release()['VERSION_ID']
-
     install_dir = f"{script_directory}/release/install/{target}/{os_type}/{os_version}/{architecture}/{build_type}"
 
-    # Check if target directory exists
     if not os.path.isdir(target_dir):
         print(f"❌ Error: Target '{target}' not found in '{os.path.join(script_directory, 'src')}'.")
         return
@@ -1292,7 +1281,6 @@ def release(script_directory, target, build_type):
     release_file_path = os.path.join(target_dir, 'release.yaml')
     repository_file_path = os.path.join(script_directory, 'repositories.yaml')
 
-    # Check if release.yaml exists
     if not os.path.isfile(release_file_path):
         print(f"❌ Error: 'release.yaml' not found in '{target_dir}'.")
         return
@@ -1305,185 +1293,129 @@ def release(script_directory, target, build_type):
                 details = yaml.safe_load(file)
                 repositories = yaml.safe_load(repository_file)
 
-                # --- BUILD STEPS NOW INLINED ---
                 print(f"\n--- Setting up build for '{target}' ---")
                 build_dir = Path(script_directory) / "release" / "build" / target
-                delete_directory(build_dir)  # Delete the existing build directory
-                setup(script_directory, package_name = target, build_type=build_type, build_dir = str(build_dir))
+                setup(package_name = target, build_type=build_type, build_dir = str(build_dir)) # Assuming setup is defined
                 os.makedirs(build_dir / "build", exist_ok=True)
 
-                # 1. Run CMake
                 print("⚙️  Running CMake...")
-                cmake_command = ["cmake",
-                                 "../../../..",
-                                 "-G Ninja",
-                                 f"-DCMAKE_INSTALL_PREFIX={install_dir}",
-                                 f"-DCMAKE_BUILD_TYPE={build_type}",
-                                 "-DRAISIN_RELEASE_BUILD=ON"]
-                try:
-                    subprocess.run(
-                        cmake_command,
-                        cwd=build_dir / "build",
-                        check=True,
-                        capture_output=True,
-                        text=True
-                    )
-                    print("✅ CMake configuration successful.")
-                except FileNotFoundError:
-                    print("❌ Error: 'cmake' command not found. Is CMake installed and in your PATH?")
-                    return
-                except subprocess.CalledProcessError as e:
-                    print(f"❌ CMake failed with exit code {e.returncode}:\n{e.stderr}")
-                    return
+                cmake_command = ["cmake", "../../../..", "-G Ninja", f"-DCMAKE_INSTALL_PREFIX={install_dir}", f"-DCMAKE_BUILD_TYPE={build_type}", "-DRAISIN_RELEASE_BUILD=ON"]
+                subprocess.run(cmake_command, cwd=build_dir / "build", check=True, capture_output=True, text=True)
+                print("✅ CMake configuration successful.")
 
-                # 2. Build with Ninja, using all available CPU cores
                 print("🛠️  Building with Ninja...")
-
-                # Get the number of CPU cores available on the system
-                core_count = int(os.cpu_count() / 2) or 4 # Fallback to 4 if count is undetermined
+                core_count = int(os.cpu_count() / 2) or 4
                 print(f"🔩 Using {core_count} cores for the build.")
-
-                # Dynamically set the job count '-j' for Ninja
                 build_command = ["ninja", "install", f"-j{core_count}"]
+                subprocess.run(build_command, cwd=build_dir / "build", check=True, capture_output=True, text=True)
+                print(f"✅ Build for '{target}' complete!")
 
-                try:
-                    subprocess.run(
-                        build_command,
-                        cwd=build_dir / "build",
-                        check=True,
-                        capture_output=True,
-                        text=True
-                    )
-                    print(f"✅ Build for '{target}' complete!")
-                except FileNotFoundError:
-                    print("❌ Error: 'ninja' command not found. Is Ninja installed and in your PATH?")
-                    return
-                except subprocess.CalledProcessError as e:
-                    print(f"❌ Ninja build failed with exit code {e.returncode}:\n{e.stderr}")
-                    return
-
-                shutil.copy(Path(script_directory) / 'src' / target / 'release.yaml',
-                            Path(install_dir) / 'release.yaml')
-
+                shutil.copy(Path(script_directory) / 'src' / target / 'release.yaml', Path(install_dir) / 'release.yaml')
                 if (Path(script_directory) / 'src' / target / 'install_dependencies.sh').is_file():
-                    shutil.copy(Path(script_directory) / 'src' / target / 'install_dependencies.sh',
-                                Path(install_dir) / 'install_dependencies.sh')
+                    shutil.copy(Path(script_directory) / 'src' / target / 'install_dependencies.sh', Path(install_dir) / 'install_dependencies.sh')
 
-                # --- NEW: COMPRESS THE INSTALLED DIRECTORY ---
                 print("\n--- Creating Release Archive ---")
-                # 1. Get required information for the filename
                 version = details.get('version', '0.0.0')
-
-                # 2. Define source directory and archive name
                 archive_name_base = f"{target}-{os_type}-{os_version}-{architecture}-{build_type}-v{version}"
-                archive_output_path = os.path.join(install_dir, archive_name_base)
+                release_dir = Path(script_directory) / 'release'
+                archive_file = release_dir / (archive_name_base + '.zip')
+                print(f"📦 Compressing '{install_dir}'...")
+                subprocess.run(['zip', '-r', str(archive_file), '.'], cwd=install_dir, check=True, capture_output=True)
+                print(f"✅ Successfully created archive: {archive_file}")
 
-                try:
-                    print(f"📦 Compressing '{install_dir}'...")
-
-                    # 3. Create the zip archive
-                    try:
-                        release_dir = Path(script_directory) / 'release'
-                        archive_file = release_dir / (archive_name_base + '.zip')
-
-                        subprocess.run(
-                            ['zip', '-r', str(archive_file), '.'],
-                            cwd=install_dir,
-                            check=True,      # Raises an exception if zip fails
-                            capture_output=True # Hides the command's output unless there's an error
-                        )
-
-                        print(f"✅ Successfully created archive: {archive_file}")
-
-                    except FileNotFoundError:
-                        print("❌ ERROR: The 'zip' command is not installed or not in your PATH.")
-                    except subprocess.CalledProcessError as e:
-                        print(f"❌ ERROR: Archiving failed with exit code {e.returncode}.")
-                        print(e.stderr.decode())
-
-                    print(f"✅ Successfully created release archive:\n   {archive_file}")
-
-                except KeyError:
-                    print("❌ Error: Could not find 'release: version:' key path in release.yaml.")
-                except FileNotFoundError:
-                    print(f"❌ Error: Install directory not found at '{install_dir}'. Cannot create archive.")
-                except Exception as e:
-                    print(f"❌ An unexpected error occurred during archiving: {e}")
-
-                # --- NEW: UPLOAD TO GITHUB RELEASE ---
                 secrets_path = os.path.join(script_directory, 'secrets.yaml')
                 if not os.path.isfile(secrets_path):
-                    print("❌ Error: 'secrets.yaml' not found. Cannot authenticate for GitHub upload.")
+                    print("❌ Error: 'secrets.yaml' not found. Cannot upload to GitHub.")
                     return
                 with open(secrets_path, 'r') as secrets_file:
                     secrets = yaml.safe_load(secrets_file)
 
+                print("\n--- Uploading to GitHub Release ---")
+
+                release_info = repositories.get(target)
+                if not (release_info and release_info.get('url')):
+                    print(f"ℹ️ Repository URL for '{target}' not found in 'repositories.yaml'. Skipping GitHub release.")
+                    return
+
+                repo_url = release_info['url']
+                match = re.search(r'git@github\.com:(.*)\.git', repo_url)
+                repo_slug = match.group(1) if match else None
+                if not repo_slug:
+                    print(f"❌ Error: Could not parse repository from URL: {repo_url}")
+                    return
+
+                owner = repo_slug.split('/')[0]
+                token = secrets.get("gh_tokens", {}).get(owner)
+                if not token:
+                    print(f"❌ Error: Token for owner '{owner}' not found in secrets.yaml.")
+                    return
+
+                auth_env = os.environ.copy()
+                auth_env["GH_TOKEN"] = token
+                tag_name = f"v{version}"
+                archive_filename = os.path.basename(archive_file)
+
+                # 1. Check if the release and asset already exist
+                release_exists = True
+                asset_exists = False
                 try:
-                    print("\n--- Uploading to GitHub Release ---")
-                    try:
-                        # 1. Get GitHub info from YAML
-                        release_info = repositories.get(target)
-                        if not release_info:
-                            print(f"ℹ️ {target} in 'repositories.yaml' not found in YAML. Skipping GitHub release.")
-                            return
+                    print(f"Checking status of release '{tag_name}' in '{repo_slug}'...")
+                    list_cmd = ["gh", "release", "view", tag_name, "--repo", repo_slug, "--json", "assets"]
+                    result = subprocess.run(list_cmd, check=True, capture_output=True, text=True, env=auth_env)
+                    release_data = json.loads(result.stdout)
+                    existing_assets = [asset['name'] for asset in release_data.get('assets', [])]
+                    if archive_filename in existing_assets:
+                        asset_exists = True
 
-                        repo_url = release_info.get('url')
-                        if not repo_url:
-                            print("ℹ️ 'release.url' not found in YAML. Skipping GitHub release.")
-                            return
+                except subprocess.CalledProcessError as e:
+                    if "release not found" in e.stderr:
+                        release_exists = False
+                    else:
+                        print(f"❌ Error checking release status: {e.stderr}")
+                        return
 
-                        # 2. Get token from secrets and prepare environment
-                        path = urlparse(repo_url).path
-                        token = secrets.get("gh_tokens").get(path.split(':')[1].split('/')[0])
+                # 2. Decide whether to create, upload, or prompt for overwrite
+                if not release_exists:
+                    print(f"✅ Release '{tag_name}' does not exist. Creating a new one...")
+                    gh_create_cmd = [
+                        "gh", "release", "create", tag_name, str(archive_file),
+                        "--repo", repo_slug, "--title", f"Release {tag_name}",
+                        "--notes", f"Automated release of version {version}."
+                    ]
+                    subprocess.run(gh_create_cmd, check=True, capture_output=True, text=True, env=auth_env)
+                    print(f"✅ Successfully created new release and uploaded '{archive_filename}'.")
+                elif asset_exists:
+                    prompt = input(f"⚠️ Asset '{archive_filename}' already exists. Overwrite? (y/n): ").lower()
+                    if prompt in ['y', 'yes']:
+                        print(f"🚀 Overwriting asset...")
+                        gh_upload_cmd = [
+                            "gh", "release", "upload", tag_name, str(archive_file),
+                            "--repo", repo_slug, "--clobber"
+                        ]
+                        subprocess.run(gh_upload_cmd, check=True, capture_output=True, text=True, env=auth_env)
+                        print(f"✅ Successfully overwrote asset in release '{tag_name}'.")
+                    else:
+                        print(f"🚫 Upload for '{archive_filename}' cancelled by user.")
+                else: # Release exists, but asset does not
+                    print(f"🚀 Uploading new asset to existing release '{tag_name}'...")
+                    gh_upload_cmd = [
+                        "gh", "release", "upload", tag_name, str(archive_file),
+                        "--repo", repo_slug
+                    ]
+                    subprocess.run(gh_upload_cmd, check=True, capture_output=True, text=True, env=auth_env)
+                    print(f"✅ Successfully uploaded asset to release '{tag_name}'.")
 
-                        if not token:
-                            print(f"❌ Error: Token for '{repo_url}' not found in secrets.yaml.")
-                            return
-                        auth_env = os.environ.copy()
-                        auth_env["GH_TOKEN"] = token
-
-                        # 3. Parse repo slug and define release details
-                        match = re.search(r'git@github\.com:(.*)\.git', repo_url)
-                        repo_slug = match.group(1) if match else None
-                        if not repo_slug:
-                            print(f"❌ Error: Could not parse repository from URL: {repo_url}")
-                            return
-                        tag_name = f"v{version}"
-
-                        # 4. Try to upload to an existing release first
-                        print(f"🚀 Checking for existing release '{tag_name}' in '{repo_slug}'...")
-                        try:
-                            gh_upload_cmd = [
-                                "gh", "release", "upload", tag_name, archive_file,
-                                "--repo", repo_slug
-                            ]
-                            subprocess.run(gh_upload_cmd, check=True, capture_output=True, text=True, env=auth_env)
-                            print(f"✅ Successfully uploaded asset to existing release '{tag_name}'.")
-                        # Capture the exception object to inspect its output
-                        except subprocess.CalledProcessError as e:
-                            # Now, try to create the release
-                            print(f"ℹ️ Assuming release '{tag_name}' does not exist. Creating a new one...")
-                            gh_create_cmd = [
-                                "gh", "release", "create", tag_name, archive_file,
-                                "--repo", repo_slug,
-                                "--title", f"{tag_name}",
-                                "--notes", f"Automated release of version {version}.",
-                                "--draft=false"
-                            ]
-                            subprocess.run(gh_create_cmd, check=True, capture_output=True, text=True, env=auth_env)
-                            print(f"✅ Successfully created new release and uploaded asset.")
-                    except Exception as e:
-                        print(f"❌ An error occurred during GitHub upload: {e}")
-
-                except Exception as e:
-                    print(f"🔥 An unexpected top-level error occurred: {e}")
-
+    # Keep your existing exception handling
+    except FileNotFoundError as e:
+        print(f"❌ Command not found: '{e.filename}'. Is the required tool (cmake, ninja, zip, gh) installed and in your PATH?")
+    except subprocess.CalledProcessError as e:
+        print(f"❌ A command failed with exit code {e.returncode}:\n{e.stderr}")
     except yaml.YAMLError as e:
         print(f"🔥 Error parsing YAML file: {e}")
     except Exception as e:
         print(f"🔥 An unexpected error occurred: {e}")
 
-def install(script_directory, targets, build_type):
+def install(targets, build_type):
     """
     Downloads and installs packages and their dependencies recursively. It automatically
     processes all packages in the 'src' directory, then prioritizes existing precompiled
@@ -1494,6 +1426,7 @@ def install(script_directory, targets, build_type):
                                 and where packages will be installed.
         targets (list): A list of strings, each specifying a package to install,
                         e.g., ["raisin", "my-plugin>=1.2<2.0"].
+                        :param build_type:
     """
     print("🚀 Starting recursive installation process...")
     script_dir_path = Path(script_directory)
@@ -1514,11 +1447,6 @@ def install(script_directory, targets, build_type):
     except FileNotFoundError:
         print(f"❌ Error: Secrets file not found at {secrets_path}")
         return
-
-    # ## 2. System Information (Omitted for brevity)
-    os_type = platform.freedesktop_os_release()['ID']
-    architecture = platform.machine()
-    os_version = platform.freedesktop_os_release()['VERSION_ID']
 
     # ## 3. Process Installation Queue
     install_queue = list(targets)
@@ -1886,7 +1814,7 @@ def manage_git_repos(pull_mode, origin = "origin"):
             print(f"{repo['name']:<{max_name}} | {repo['branch']:<{max_branch}} | {repo['changes']:<{max_changes}} | {repo['status']}")
 
 
-def list_all_available_packages(script_directory: str):
+def list_all_available_packages():
     """
     Scans all repository.yaml files, finds all available packages, and lists
     their most recent release versions that have a valid asset for the current system.
@@ -1897,9 +1825,6 @@ def list_all_available_packages(script_directory: str):
 
     # --- Get System Info for Asset Matching ---
     try:
-        os_type = platform.freedesktop_os_release()['ID']
-        architecture = platform.machine()
-        os_version = platform.freedesktop_os_release()['VERSION_ID']
         print(f"ℹ️  Checking for assets compatible with: {os_type}-{os_version}-{architecture}")
     except FileNotFoundError:
         print("❌ Error: Could not determine OS information from /etc/os-release.")
@@ -1997,7 +1922,7 @@ def list_all_available_packages(script_directory: str):
         print(f"  - {package_name}: {versions_str}")
 
 
-def list_github_release_versions(package_name: str, script_directory: str):
+def list_github_release_versions(package_name: str):
     """
     Fetches and lists all available release versions of a package from its GitHub
     repository that have a valid asset for the current system.
@@ -2007,9 +1932,6 @@ def list_github_release_versions(package_name: str, script_directory: str):
 
     # --- 1. Get System Info for Asset Matching ---
     try:
-        os_type = platform.freedesktop_os_release()['ID']
-        architecture = platform.machine()
-        os_version = platform.freedesktop_os_release()['VERSION_ID']
         print(f"ℹ️  Checking for assets compatible with: {os_type}-{os_version}-{architecture}")
     except FileNotFoundError:
         print("❌ Error: Could not determine OS information from /etc/os-release.")
@@ -2105,8 +2027,102 @@ def list_github_release_versions(package_name: str, script_directory: str):
         print(f"❌ An unexpected error occurred: {e}")
 
 
+def _read_os_release() -> Dict[str, str]:
+    """
+    Best-effort reader for Linux /etc/os-release. Uses platform.freedesktop_os_release()
+    when available; falls back to parsing the file manually. Returns {} on failure.
+    """
+    # Python 3.10+ provides this:
+    if hasattr(platform, "freedesktop_os_release"):
+        try:
+            return platform.freedesktop_os_release()
+        except Exception:
+            pass
+
+    # Manual fallback for older Pythons
+    data: Dict[str, str] = {}
+    try:
+        with open("/etc/os-release", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                v = v.strip().strip('"')
+                data[k] = v
+    except Exception:
+        pass
+    return data
+
+def _normalize_arch(arch: str) -> str:
+    """
+    Normalize common architecture names across platforms.
+    """
+    m = (arch or "").lower()
+    mapping = {
+        "amd64": "x86_64",
+        "x64": "x86_64",
+        "x86_64": "x86_64",
+        "i386": "x86",
+        "i686": "x86",
+        "aarch64": "arm64",
+        "arm64": "arm64",
+        "armv7l": "armv7l",
+        "armv6l": "armv6l",
+        "ppc64le": "ppc64le",
+        "ppc64": "ppc64",
+        "s390x": "s390x",
+    }
+    return mapping.get(m, arch)
+
+def get_os_info() -> Tuple[str, str, str]:
+    """
+    Returns (os_type, architecture, os_version) across Linux/macOS/Windows.
+
+    - os_type:
+        Linux -> distro ID if available (e.g., 'ubuntu', 'fedora'), otherwise 'linux'
+        macOS -> 'macos'
+        Windows -> 'windows'
+        Other/Unix -> platform.system().lower()
+    - architecture: normalized machine type (e.g., 'x86_64', 'arm64')
+    - os_version:
+        Linux -> VERSION_ID from os-release if available, else kernel release
+        macOS -> product version (e.g., '14.5'), else kernel release
+        Windows -> major.minor.build from sys.getwindowsversion(), else win32_ver()/release()
+    """
+    system = platform.system()
+    arch = _normalize_arch(platform.machine())
+
+    if system == "Linux":
+        osr = _read_os_release()
+        os_type2 = (osr.get("ID") or "linux").lower()
+        os_version2 = osr.get("VERSION_ID") or platform.release()
+
+    elif system == "Darwin":
+        os_type2 = "macos"
+        mac_release, _, _ = platform.mac_ver()
+        os_version2 = mac_release or platform.release()
+
+    elif system == "Windows":
+        os_type2 = "windows"
+        try:
+            win = sys.getwindowsversion()  # (major, minor, build, platform, service_pack)
+            os_version2 = f"{win.major}.{win.minor}.{win.build}"
+        except Exception:
+            release, version, _, _ = platform.win32_ver()
+            os_version2 = version or release or platform.release()
+
+    else:  # e.g., FreeBSD, OpenBSD, SunOS, etc.
+        os_type2 = system.lower() if system else "unknown"
+        os_version2 = platform.release()
+
+    return os_type2, arch, os_version2
+
+
 if __name__ == '__main__':
     script_directory = os.path.dirname(os.path.realpath(__file__))
+    os_type, architecture, os_version = get_os_info()
+
     delete_directory(os.path.join(script_directory, 'temp'))
 
     # Display help if no arguments are given or if help is explicitly requested
@@ -2150,7 +2166,7 @@ if __name__ == '__main__':
         else:
             print(f"🛠️ building the following targets: {build_pattern}")
 
-        setup(script_directory)
+        setup()
 
     elif sys.argv[1] == 'release':
         # Check if any arguments are provided after 'release'
@@ -2176,18 +2192,17 @@ if __name__ == '__main__':
                 # Iterate over each target and call the release function
                 for target in targets:
                     print(f"--> Releasing target: {target}")
-                    release(script_directory, target, build_type)
-                print("All targets released.")
+                    release(target, build_type)
 
     elif sys.argv[1] == 'index':
         if len(sys.argv) >= 3 and sys.argv[2] == 'versions':
             # Case 1: Package name is provided, list its versions
             if len(sys.argv) == 4:
                 package_name = sys.argv[3]
-                list_github_release_versions(package_name, script_directory)
+                list_github_release_versions(package_name)
             # Case 2: No package name, list all available packages
             elif len(sys.argv) == 3:
-                list_all_available_packages(script_directory)
+                list_all_available_packages()
             else:
                 print("❌ Error: Invalid 'index versions' command. Provide zero or one package name.")
         else:
@@ -2208,7 +2223,7 @@ if __name__ == '__main__':
             targets = targets[:-1]
 
         # Call the install function with the parsed arguments
-        install(script_directory, targets, build_type)
+        install(targets, build_type)
 
     elif len(sys.argv) >= 3 and sys.argv[1] == 'git':
         if sys.argv[2] == 'status':
