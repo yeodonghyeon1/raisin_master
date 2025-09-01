@@ -51,7 +51,7 @@ script_directory = ""
 # for windows
 ninja_path = ""
 visual_studio_path = ""
-developer_env = []
+developer_env = dict()
 
 def is_root():
     """Check if the current user is root."""
@@ -579,10 +579,11 @@ def update_cmake_file(project_directories, cmake_dir):
         if project_name in project_dir_map:
             project_dir = project_dir_map[project_name]
             if (Path(project_dir) / "CMakeLists.txt").is_file():
-                subdirectory_lines.append(f"add_subdirectory({project_dir.replace("\\", "/")})")
+                project_dir = project_dir.replace('\\', '/')
+                subdirectory_lines.append(f"add_subdirectory({project_dir})")
 
     cmake_content = cmake_template_content.replace('@@SUB_PROJECT@@', "\n".join(subdirectory_lines))
-    cmake_content = cmake_content.replace('@@SCRIPT_DIR@@', script_directory.replace("\\", "/"))
+    cmake_content = cmake_content.replace('@@SCRIPT_DIR@@', script_directory)
 
     cmake_file_path = os.path.join(script_directory, 'CMakeLists.txt')
 
@@ -1310,12 +1311,20 @@ def release(target, build_type):
                 if ninja_path:
                     cmake_command.append(f"-DCMAKE_MAKE_PROGRAM={ninja_path}")
 
-                subprocess.run(cmake_command,
-                               cwd=build_dir / "build",
-                               check=True,
-                               capture_output=True,
-                               text=True,
-                               env=developer_env)
+                # Start with the common arguments for subprocess.run
+                kwargs = {
+                    "cwd": build_dir / "build",
+                    "check": True,
+                    "capture_output": True,
+                    "text": True
+                }
+
+                # Conditionally add the 'env' argument ONLY if developer_env is not empty
+                if developer_env:
+                    kwargs["env"] = developer_env
+
+                subprocess.run(cmake_command, **kwargs)
+
                 print("✅ CMake configuration successful.")
 
                 print("🛠️  Building with Ninja...")
@@ -2115,7 +2124,7 @@ def get_os_info() -> Tuple[str, str, str, str, str, dict]:
     arch = _normalize_arch(platform.machine())
     vs_path2 = ""
     ninja_path2 = ""
-    developer_env2 = []
+    developer_env2 = dict()
 
     if system == "Linux":
         osr = _read_os_release()
@@ -2146,7 +2155,7 @@ def get_os_info() -> Tuple[str, str, str, str, str, dict]:
 
 
 if __name__ == '__main__':
-    script_directory = os.path.dirname(os.path.realpath(__file__))
+    script_directory = Path(os.path.dirname(os.path.realpath(__file__))).as_posix()
     os_type, architecture, os_version, visual_studio_path, ninja_path, developer_env = get_os_info()
 
     delete_directory(os.path.join(script_directory, 'temp'))
@@ -2295,14 +2304,20 @@ if __name__ == '__main__':
             print(f"🛠️ Using {core_count} cores for the build.")
 
             try:
-                result = subprocess.run(
-                    cmake_command,
-                    cwd=build_dir,
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                    env=developer_env
-                )
+                # Start with the arguments that are always present
+                kwargs = {
+                    "cwd": build_dir,
+                    "check": True,
+                    "capture_output": True,
+                    "text": True
+                }
+
+                # Only add the 'env' argument if developer_env is not empty
+                if developer_env:
+                    kwargs["env"] = developer_env
+
+                # Call the command by unpacking the arguments dictionary
+                result = subprocess.run(cmake_command, **kwargs)
                 print("✅ CMake configured successfully!")
                 print(result.stdout)
 
