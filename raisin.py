@@ -11,6 +11,7 @@ import yaml
 import fnmatch
 import concurrent.futures
 from typing import Tuple, Dict
+from script.build_tools import find_build_tools
 
 from packaging.version import parse as parse_version, InvalidVersion
 import zipfile
@@ -46,6 +47,11 @@ os_type = ""
 architecture = ""
 os_version = ""
 script_directory = ""
+
+# for windows
+ninja_path = ""
+visual_studio_path = ""
+developer_env = []
 
 def is_root():
     """Check if the current user is root."""
@@ -573,10 +579,10 @@ def update_cmake_file(project_directories, cmake_dir):
         if project_name in project_dir_map:
             project_dir = project_dir_map[project_name]
             if (Path(project_dir) / "CMakeLists.txt").is_file():
-                subdirectory_lines.append(f"add_subdirectory({project_dir})")
+                subdirectory_lines.append(f"add_subdirectory({project_dir.replace("\\", "/")})")
 
     cmake_content = cmake_template_content.replace('@@SUB_PROJECT@@', "\n".join(subdirectory_lines))
-    cmake_content = cmake_content.replace('@@SCRIPT_DIR@@', script_directory)
+    cmake_content = cmake_content.replace('@@SCRIPT_DIR@@', script_directory.replace("\\", "/"))
 
     cmake_file_path = os.path.join(script_directory, 'CMakeLists.txt')
 
@@ -1299,8 +1305,17 @@ def release(target, build_type):
                 os.makedirs(build_dir / "build", exist_ok=True)
 
                 print("⚙️  Running CMake...")
-                cmake_command = ["cmake", "../../../..", "-G Ninja", f"-DCMAKE_INSTALL_PREFIX={install_dir}", f"-DCMAKE_BUILD_TYPE={build_type}", "-DRAISIN_RELEASE_BUILD=ON"]
-                subprocess.run(cmake_command, cwd=build_dir / "build", check=True, capture_output=True, text=True)
+                cmake_command = ["cmake", "../../../..", "-G", "Ninja", f"-DCMAKE_INSTALL_PREFIX={install_dir}", f"-DCMAKE_BUILD_TYPE={build_type}", "-DRAISIN_RELEASE_BUILD=ON"]
+
+                if ninja_path:
+                    cmake_command.append(f"-DCMAKE_MAKE_PROGRAM={ninja_path}")
+
+                subprocess.run(cmake_command,
+                               cwd=build_dir / "build",
+                               check=True,
+                               capture_output=True,
+                               text=True,
+                               env=developer_env)
                 print("✅ CMake configuration successful.")
 
                 print("🛠️  Building with Ninja...")
@@ -1318,10 +1333,14 @@ def release(target, build_type):
                 version = details.get('version', '0.0.0')
                 archive_name_base = f"{target}-{os_type}-{os_version}-{architecture}-{build_type}-v{version}"
                 release_dir = Path(script_directory) / 'release'
-                archive_file = release_dir / (archive_name_base + '.zip')
+                archive_file = release_dir / archive_name_base
                 print(f"📦 Compressing '{install_dir}'...")
-                subprocess.run(['zip', '-r', str(archive_file), '.'], cwd=install_dir, check=True, capture_output=True)
-                print(f"✅ Successfully created archive: {archive_file}")
+                shutil.make_archive(
+                    base_name=str(archive_file),
+                    format='zip',
+                    root_dir=str(install_dir)
+                )
+                print(f"✅ Successfully created archive: {archive_file}.zip")
 
                 secrets_path = os.path.join(script_directory, 'secrets.yaml')
                 if not os.path.isfile(secrets_path):
@@ -1353,7 +1372,9 @@ def release(target, build_type):
                 auth_env = os.environ.copy()
                 auth_env["GH_TOKEN"] = token
                 tag_name = f"v{version}"
-                archive_filename = os.path.basename(archive_file)
+
+                archive_filename = os.path.basename(archive_file) + ".zip"
+                archive_file_str = str(archive_file) + ".zip"
 
                 # 1. Check if the release and asset already exist
                 release_exists = True
@@ -1378,7 +1399,7 @@ def release(target, build_type):
                 if not release_exists:
                     print(f"✅ Release '{tag_name}' does not exist. Creating a new one...")
                     gh_create_cmd = [
-                        "gh", "release", "create", tag_name, str(archive_file),
+                        "gh", "release", "create", tag_name, archive_file_str,
                         "--repo", repo_slug, "--title", f"Release {tag_name}",
                         "--notes", f"Automated release of version {version}."
                     ]
@@ -1389,7 +1410,7 @@ def release(target, build_type):
                     if prompt in ['y', 'yes']:
                         print(f"🚀 Overwriting asset...")
                         gh_upload_cmd = [
-                            "gh", "release", "upload", tag_name, str(archive_file),
+                            "gh", "release", "upload", tag_name, archive_file_str,
                             "--repo", repo_slug, "--clobber"
                         ]
                         subprocess.run(gh_upload_cmd, check=True, capture_output=True, text=True, env=auth_env)
@@ -1399,7 +1420,7 @@ def release(target, build_type):
                 else: # Release exists, but asset does not
                     print(f"🚀 Uploading new asset to existing release '{tag_name}'...")
                     gh_upload_cmd = [
-                        "gh", "release", "upload", tag_name, str(archive_file),
+                        "gh", "release", "upload", tag_name, archive_file_str,
                         "--repo", repo_slug
                     ]
                     subprocess.run(gh_upload_cmd, check=True, capture_output=True, text=True, env=auth_env)
@@ -2075,7 +2096,7 @@ def _normalize_arch(arch: str) -> str:
     }
     return mapping.get(m, arch)
 
-def get_os_info() -> Tuple[str, str, str]:
+def get_os_info() -> Tuple[str, str, str, str, str, dict]:
     """
     Returns (os_type, architecture, os_version) across Linux/macOS/Windows.
 
@@ -2092,6 +2113,9 @@ def get_os_info() -> Tuple[str, str, str]:
     """
     system = platform.system()
     arch = _normalize_arch(platform.machine())
+    vs_path2 = ""
+    ninja_path2 = ""
+    developer_env2 = []
 
     if system == "Linux":
         osr = _read_os_release()
@@ -2104,10 +2128,12 @@ def get_os_info() -> Tuple[str, str, str]:
         os_version2 = mac_release or platform.release()
 
     elif system == "Windows":
+        vs_path2, ninja_path2, developer_env2 = find_build_tools("x64")
         os_type2 = "windows"
         try:
             win = sys.getwindowsversion()  # (major, minor, build, platform, service_pack)
-            os_version2 = f"{win.major}.{win.minor}.{win.build}"
+            # os_version2 = f"{win.major}.{win.minor}.{win.build}"
+            os_version2 = "10or11"
         except Exception:
             release, version, _, _ = platform.win32_ver()
             os_version2 = version or release or platform.release()
@@ -2116,12 +2142,12 @@ def get_os_info() -> Tuple[str, str, str]:
         os_type2 = system.lower() if system else "unknown"
         os_version2 = platform.release()
 
-    return os_type2, arch, os_version2
+    return os_type2, arch, os_version2, vs_path2, ninja_path2, developer_env2
 
 
 if __name__ == '__main__':
     script_directory = os.path.dirname(os.path.realpath(__file__))
-    os_type, architecture, os_version = get_os_info()
+    os_type, architecture, os_version, visual_studio_path, ninja_path, developer_env = get_os_info()
 
     delete_directory(os.path.join(script_directory, 'temp'))
 
@@ -2262,6 +2288,8 @@ if __name__ == '__main__':
                              "-G", "Ninja",
                              f"-DCMAKE_BUILD_TYPE={build_type.upper()}",
                              ".."]
+            if ninja_path:
+                cmake_command.append(f"-DCMAKE_MAKE_PROGRAM={ninja_path}")
 
             core_count = int(os.cpu_count() / 2) or 4
             print(f"🛠️ Using {core_count} cores for the build.")
@@ -2272,7 +2300,8 @@ if __name__ == '__main__':
                     cwd=build_dir,
                     check=True,
                     capture_output=True,
-                    text=True
+                    text=True,
+                    env=developer_env
                 )
                 print("✅ CMake configured successfully!")
                 print(result.stdout)
