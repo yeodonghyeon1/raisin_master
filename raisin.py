@@ -52,6 +52,8 @@ script_directory = ""
 ninja_path = ""
 visual_studio_path = ""
 developer_env = dict()
+vcpkg_dependencies = set()
+
 
 def is_root():
     """Check if the current user is root."""
@@ -1156,6 +1158,24 @@ def deploy_install_packages():
                 print(f"  -> Deploying target '{target_name}' to: {final_dest_dir}")
                 deployed_targets.add(target_name)
 
+            release_yaml_path = p / 'release.yaml'
+            if release_yaml_path.is_file():
+                try:
+                    with open(release_yaml_path, 'r') as f:
+                        release_data = yaml.safe_load(f)
+                        # Ensure data was loaded and is a dictionary
+                        if release_data and isinstance(release_data, dict):
+                            # Safely get the list of dependencies, default to empty list
+                            dependencies = release_data.get('vcpkg_dependencies', [])
+                            if dependencies and isinstance(dependencies, list):
+                                # Use set.update() to add all items from the list
+                                vcpkg_dependencies.update(dependencies)
+                except yaml.YAMLError as ye:
+                    print(f"    - ⚠️ Warning: Could not parse {release_yaml_path}: {ye}")
+                except IOError as ioe:
+                    print(f"    - ⚠️ Warning: Could not read {release_yaml_path}: {ioe}")
+
+
             # Copy contents, merging files from different build_types
             shutil.copytree(source_dir, final_dest_dir, dirs_exist_ok=True)
 
@@ -1172,6 +1192,58 @@ def deploy_install_packages():
 
     except Exception as e:
         print(f"❌ An error occurred during deployment: {e}")
+
+def collect_src_vcpkg_dependencies():
+    """
+    Scans subdirectories in '{script_directory}/src' for 'release.yaml' files.
+
+    For each 'release.yaml' found, it reads the file and checks for a
+    'vcpkg_dependencies' node. If the node exists, its contents (a list of
+    strings) are merged into a master set to collect all unique dependencies.
+
+    Returns:
+        set: A set containing all unique vcpkg dependency strings found.
+    """
+    src_path = Path(script_directory) / 'src'
+    if not src_path.is_dir():
+        print(f"🤷 Source directory not found at: {src_path}")
+        return set()
+
+    print(f"🔍 Scanning for vcpkg dependencies in: {src_path}")
+
+    # Use a set to automatically handle duplicate dependencies
+    all_vcpkg_dependencies = set()
+
+    # Iterate over each item in the 'src' directory
+    for project_dir in src_path.iterdir():
+        # Process only if the item is a directory
+        if not project_dir.is_dir():
+            continue
+
+        release_yaml_path = project_dir / 'release.yaml'
+
+        # Check if 'release.yaml' exists in the subdirectory
+        if release_yaml_path.is_file():
+            try:
+                with open(release_yaml_path, 'r') as f:
+                    release_data = yaml.safe_load(f)
+
+                    # Ensure data was loaded and is a dictionary
+                    if release_data and isinstance(release_data, dict):
+                        # Safely get the list of dependencies, defaulting to an empty list
+                        dependencies = release_data.get('vcpkg_dependencies', [])
+
+                        if dependencies and isinstance(dependencies, list):
+                            print(f"  -> Found {len(dependencies)} dependencies in '{project_dir.name}'")
+                            # Merge the found dependencies into the main set
+                            all_vcpkg_dependencies.update(dependencies)
+
+            except yaml.YAMLError as e:
+                print(f"  -> ⚠️ Error parsing YAML in '{project_dir.name}': {e}")
+            except IOError as e:
+                print(f"  -> ⚠️ Error reading file in '{project_dir.name}': {e}")
+
+    return all_vcpkg_dependencies
 
 def setup(package_name = "", build_type = "", build_dir = ""):
     """
@@ -1271,6 +1343,7 @@ def setup(package_name = "", build_type = "", build_dir = ""):
                     Path(script_directory) / install_dir / 'generated', dirs_exist_ok=True)
 
     deploy_install_packages()
+    collect_src_vcpkg_dependencies()
 
 def release(target, build_type):
     """
