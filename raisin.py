@@ -1207,12 +1207,9 @@ def collect_src_vcpkg_dependencies():
     src_path = Path(script_directory) / 'src'
     if not src_path.is_dir():
         print(f"🤷 Source directory not found at: {src_path}")
-        return set()
+        return
 
     print(f"🔍 Scanning for vcpkg dependencies in: {src_path}")
-
-    # Use a set to automatically handle duplicate dependencies
-    all_vcpkg_dependencies = set()
 
     # Iterate over each item in the 'src' directory
     for project_dir in src_path.iterdir():
@@ -1236,14 +1233,56 @@ def collect_src_vcpkg_dependencies():
                         if dependencies and isinstance(dependencies, list):
                             print(f"  -> Found {len(dependencies)} dependencies in '{project_dir.name}'")
                             # Merge the found dependencies into the main set
-                            all_vcpkg_dependencies.update(dependencies)
+                            vcpkg_dependencies.update(dependencies)
 
             except yaml.YAMLError as e:
                 print(f"  -> ⚠️ Error parsing YAML in '{project_dir.name}': {e}")
             except IOError as e:
                 print(f"  -> ⚠️ Error reading file in '{project_dir.name}': {e}")
 
-    return all_vcpkg_dependencies
+    return
+
+def generate_vcpkg_json():
+    """
+    Reads a vcpkg.json template, replaces a placeholder with dependencies,
+    and saves the new file.
+
+    Args:
+        script_directory (str): The absolute path to the script's directory.
+        vcpkg_dependencies (set): A set of strings representing vcpkg package names.
+    """
+    # Define the template and output file paths
+    script_path = Path(script_directory)
+    template_path = script_path / "templates" / "vcpkg.json"
+    output_path = script_path / "vcpkg.json"
+
+    # --- 1. Format the dependencies ---
+    # Convert the set of dependencies into a single, comma-separated string
+    # where each item is enclosed in double quotes.
+    # e.g., {'fmt', 'spdlog'} -> '"fmt", "spdlog"'
+    deps_string = ", ".join(f'"{dep}"' for dep in sorted(list(vcpkg_dependencies)))
+
+    try:
+        # --- 2. Read the template file ---
+        print(f"Reading template from: {template_path}")
+        with open(template_path, "r", encoding="utf-8") as f:
+            template_content = f.read()
+
+        # --- 3. Replace the placeholder ---
+        new_content = template_content.replace("@@DEP@@", deps_string)
+
+        # --- 4. Write to the output file ---
+        # Using "w" mode will create the file or overwrite it if it already exists.
+        print(f"Writing new vcpkg.json to: {output_path}")
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write(new_content)
+
+        print("✅ Successfully generated vcpkg.json.")
+
+    except FileNotFoundError:
+        print(f"❌ Error: Template file not found at {template_path}")
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
 
 def setup(package_name = "", build_type = "", build_dir = ""):
     """
@@ -1344,6 +1383,7 @@ def setup(package_name = "", build_type = "", build_dir = ""):
 
     deploy_install_packages()
     collect_src_vcpkg_dependencies()
+    generate_vcpkg_json()
 
 def release(target, build_type):
     """
