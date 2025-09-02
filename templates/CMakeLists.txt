@@ -12,17 +12,19 @@ endif()
 
 include(@@SCRIPT_DIR@@/cmake/raisin_helper.cmake)
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=native")
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -march=native")
 set(CMAKE_PREFIX_PATH "@@SCRIPT_DIR@@/install;${CMAKE_PREFIX_PATH}" CACHE PATH "Search paths for CMake packages")
 set(RAISIN_MASTER_INCLUDE @@SCRIPT_DIR@@/generated/include CACHE STRING "include path")
 set(CMAKE_DEBUG_POSTFIX "_debug_build" CACHE STRING "Debug Postfix for lib, samples and tools")
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
-add_compile_options(-Werror=return-type)
-add_compile_options(-Wno-unused-function)
-add_compile_options(-Wno-sign-compare)
-add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-Wno-reorder>)
 
+if (NOT WIN32)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=native")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -march=native")
+    add_compile_options(-Werror=return-type)
+    add_compile_options(-Wno-unused-function)
+    add_compile_options(-Wno-sign-compare)
+    add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-Wno-reorder>)
+endif ()
 ## Top-level CMakeLists.txt
 #set(SAN_FLAGS "-fsanitize=address,undefined,leak -fno-omit-frame-pointer")
 #
