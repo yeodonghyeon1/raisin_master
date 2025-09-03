@@ -54,6 +54,19 @@ visual_studio_path = ""
 developer_env = dict()
 vcpkg_dependencies = set()
 
+def get_display_width(text):
+    """
+    Calculates the display width of a string, accounting for specific wide characters.
+    """
+    # Emojis used in this script that take up 2 character spaces
+    wide_chars = {'✅', '⬇️', '⬆️', '🔱', '⚠️'}
+    width = 0
+    for char in text:
+        if char in wide_chars:
+            width += 2
+        else:
+            width += 1
+    return width
 
 def is_root():
     """Check if the current user is root."""
@@ -1840,6 +1853,10 @@ def run_command(command, cwd):
     except FileNotFoundError:
         return "Error: Git command not found."
 
+import re # Make sure this is at the top of your file
+import os
+# Your other functions...
+
 def process_repo(repo_path, pull_mode=False, origin="origin"):
     """
     Processes a single git repository.
@@ -1847,10 +1864,23 @@ def process_repo(repo_path, pull_mode=False, origin="origin"):
     - If pull_mode is True, it pulls and returns a clean summary.
     """
     is_current_dir = repo_path == os.getcwd()
-    dir_name = f"{os.path.basename(repo_path)}{' (current)' if is_current_dir else ''}"
+    base_name = os.path.basename(repo_path)
+
+    # Get the remote URL to extract the owner's name
+    owner = ""
+    remote_url = run_command(["git", "remote", "get-url", origin], repo_path)
+    if "Error:" not in remote_url:
+        match = re.search(r'(?:[:/])([^/]+)/[^/]+(?:\.git)?$', remote_url.strip())
+        if match:
+            owner = match.group(1)
+
+    # Construct the display name WITHOUT the owner
+    current_str = " (current)" if is_current_dir else ""
+    dir_name = f"{base_name}{current_str}"
 
     if pull_mode:
-        print(f"🌀 Pulling for {dir_name}...")
+        owner_str = f" ({owner})" if owner else ""
+        print(f"🌀 Pulling for {base_name}{owner_str}{current_str}...")
         branch = run_command(["git", "rev-parse", "--abbrev-ref", "HEAD"], repo_path)
 
         # Default to failure unless a success condition is met
@@ -1860,9 +1890,9 @@ def process_repo(repo_path, pull_mode=False, origin="origin"):
         if "Error:" in branch:
             pull_message = "Could not determine current branch."
         else:
+            branch = branch.strip() # Ensure no trailing newline
             pull_result = run_command(["git", "pull", origin, branch], repo_path)
 
-            # --- PARSE PULL RESULT FOR CLEAN OUTPUT ---
             if "Error:" in pull_result:
                 if "would be overwritten" in pull_result:
                     pull_message = "Local changes would be overwritten."
@@ -1871,8 +1901,8 @@ def process_repo(repo_path, pull_mode=False, origin="origin"):
                 elif "couldn't find remote ref" in pull_result:
                     pull_message = f"Remote branch '{branch}' not found."
                 else:
-                    pull_message = "See error details above." # Generic error
-            else: # Success cases
+                    pull_message = "See error details above."
+            else:
                 pull_status = "Success"
                 if "Already up to date" in pull_result:
                     pull_message = "Already up to date."
@@ -1881,12 +1911,12 @@ def process_repo(repo_path, pull_mode=False, origin="origin"):
                 else:
                     pull_message = "Pull successful (merge)."
 
-        return {"name": dir_name, "status": pull_status, "message": pull_message}
+        # Return the owner as a separate key
+        return {"name": dir_name, "owner": owner, "status": pull_status, "message": pull_message}
     else:
-        # Status check logic (unchanged)
-        run_command(["git", "fetch", "--quiet"], repo_path)
-        branch = run_command(["git", "rev-parse", "--abbrev-ref", "HEAD"], repo_path)
-        changes = run_command(["git", "diff", "--shortstat", "HEAD"], repo_path)
+        run_command(["git", "fetch", "--quiet", origin], repo_path)
+        branch = run_command(["git", "rev-parse", "--abbrev-ref", "HEAD"], repo_path).strip()
+        changes = run_command(["git", "diff", "--shortstat", "HEAD"], repo_path).strip()
         lines_to_commit = "No changes"
         if changes:
             lines_to_commit = changes.replace(" files changed", "f").replace(" file changed", "f").replace(" insertions(+)", "+").replace(" deletions(-)", "-")
@@ -1896,7 +1926,7 @@ def process_repo(repo_path, pull_mode=False, origin="origin"):
         base = run_command(["git", "merge-base", "HEAD", f"{origin}/{branch}"], repo_path)
 
         sync_status = ""
-        if "Error:" in local or "Error:" in remote:
+        if "Error:" in remote:
             sync_status = f"⚠️ No remote for '{branch}'"
         elif local == remote:
             sync_status = "✅ Up to date"
@@ -1907,16 +1937,17 @@ def process_repo(repo_path, pull_mode=False, origin="origin"):
         else:
             sync_status = "🔱 Diverged"
 
-        return {"name": dir_name, "branch": branch, "changes": lines_to_commit, "status": sync_status}
+        # Return the owner as a separate key
+        return {"name": dir_name, "owner": owner, "branch": branch, "changes": lines_to_commit, "status": sync_status}
 
 
-def manage_git_repos(pull_mode, origin = "origin"):
+def manage_git_repos(pull_mode, origin="origin"):
     """
     Manages Git repositories in the current directory and './src'.
     - Default: Checks status.
     - With '--pull' argument: Pulls and provides a clean summary.
     """
-
+    # ... (The code to find repo_paths remains unchanged) ...
     repo_paths = []
     current_dir = os.getcwd()
     if os.path.isdir(os.path.join(current_dir, '.git')):
@@ -1939,22 +1970,52 @@ def manage_git_repos(pull_mode, origin = "origin"):
     all_results.sort(key=lambda x: x['name'])
 
     if pull_mode:
+        # ... (The pull_mode logic remains unchanged) ...
         print("\n--- Pull Summary ---")
-        max_name = max(len(d['name']) for d in all_results)
-        for res in all_results:
+        summary_names = [f"{res['name']} ({res['owner']})" if res.get('owner') else res['name'] for res in all_results]
+        max_name = max(len(name) for name in summary_names)
+        for i, res in enumerate(all_results):
             icon = "✅" if res['status'] == 'Success' else "❌"
-            print(f"{icon} {res['name']:<{max_name}}  ->  {res['message']}")
+            print(f"{icon} {summary_names[i]:<{max_name}}  ->  {res['message']}")
     else:
-        # Original table printing logic
-        max_name = max(len(d['name']) for d in all_results)
-        max_branch = max(len(d['branch']) for d in all_results)
-        max_changes = max(len(d['changes']) for d in all_results)
+        # --- MODIFICATION START ---
 
-        header = (f"{'REPOSITORY':<{max_name}} | {'BRANCH':<{max_branch}} | {'PENDING CHANGES':<{max_changes}} | STATUS")
-        print(header)
-        print('-' * len(header))
+        # Define headers and the corresponding keys in the results dictionary
+        headers = {
+            "REPOSITORY": "name",
+            "OWNER": "owner",
+            "BRANCH": "branch",
+            "PENDING CHANGES": "changes",
+            "STATUS": "status"
+        }
+
+        # Calculate the maximum width for each column by checking BOTH the header and the data
+        max_widths = {}
+        for header_text, key in headers.items():
+            header_width = get_display_width(header_text)
+            max_data_width = max(get_display_width(d.get(key, '')) for d in all_results)
+            max_widths[key] = max(header_width, max_data_width)
+
+        # Build and print the header row
+        header_parts = []
+        for header_text, key in headers.items():
+            width = max_widths[key]
+            # Pad the header text to the calculated maximum width
+            header_parts.append(header_text + ' ' * (width - get_display_width(header_text)))
+        header_str = " | ".join(header_parts)
+        print(header_str)
+        print('-' * get_display_width(header_str))
+
+        # Build and print each data row
         for repo in all_results:
-            print(f"{repo['name']:<{max_name}} | {repo['branch']:<{max_branch}} | {repo['changes']:<{max_changes}} | {repo['status']}")
+            row_parts = []
+            for header_text, key in headers.items():
+                width = max_widths[key]
+                value = repo.get(key, '')
+                # Pad the cell's value to the calculated maximum width
+                padded_value = value + ' ' * (width - get_display_width(value))
+                row_parts.append(padded_value)
+            print(" | ".join(row_parts))
 
 
 def list_all_available_packages():
