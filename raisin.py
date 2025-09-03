@@ -11,6 +11,7 @@ import yaml
 import fnmatch
 import concurrent.futures
 from typing import Tuple, Dict
+from script.build_tools import find_build_tools
 
 from packaging.version import parse as parse_version, InvalidVersion
 import zipfile
@@ -46,6 +47,13 @@ os_type = ""
 architecture = ""
 os_version = ""
 script_directory = ""
+
+# for windows
+ninja_path = ""
+visual_studio_path = ""
+developer_env = dict()
+vcpkg_dependencies = set()
+
 
 def is_root():
     """Check if the current user is root."""
@@ -573,6 +581,7 @@ def update_cmake_file(project_directories, cmake_dir):
         if project_name in project_dir_map:
             project_dir = project_dir_map[project_name]
             if (Path(project_dir) / "CMakeLists.txt").is_file():
+                project_dir = project_dir.replace('\\', '/')
                 subdirectory_lines.append(f"add_subdirectory({project_dir})")
 
     cmake_content = cmake_template_content.replace('@@SUB_PROJECT@@', "\n".join(subdirectory_lines))
@@ -1149,6 +1158,24 @@ def deploy_install_packages():
                 print(f"  -> Deploying target '{target_name}' to: {final_dest_dir}")
                 deployed_targets.add(target_name)
 
+            release_yaml_path = p / 'release.yaml'
+            if release_yaml_path.is_file():
+                try:
+                    with open(release_yaml_path, 'r') as f:
+                        release_data = yaml.safe_load(f)
+                        # Ensure data was loaded and is a dictionary
+                        if release_data and isinstance(release_data, dict):
+                            # Safely get the list of dependencies, default to empty list
+                            dependencies = release_data.get('vcpkg_dependencies', [])
+                            if dependencies and isinstance(dependencies, list):
+                                # Use set.update() to add all items from the list
+                                vcpkg_dependencies.update(dependencies)
+                except yaml.YAMLError as ye:
+                    print(f"    - ⚠️ Warning: Could not parse {release_yaml_path}: {ye}")
+                except IOError as ioe:
+                    print(f"    - ⚠️ Warning: Could not read {release_yaml_path}: {ioe}")
+
+
             # Copy contents, merging files from different build_types
             shutil.copytree(source_dir, final_dest_dir, dirs_exist_ok=True)
 
@@ -1165,6 +1192,97 @@ def deploy_install_packages():
 
     except Exception as e:
         print(f"❌ An error occurred during deployment: {e}")
+
+def collect_src_vcpkg_dependencies():
+    """
+    Scans subdirectories in '{script_directory}/src' for 'release.yaml' files.
+
+    For each 'release.yaml' found, it reads the file and checks for a
+    'vcpkg_dependencies' node. If the node exists, its contents (a list of
+    strings) are merged into a master set to collect all unique dependencies.
+
+    Returns:
+        set: A set containing all unique vcpkg dependency strings found.
+    """
+    src_path = Path(script_directory) / 'src'
+    if not src_path.is_dir():
+        print(f"🤷 Source directory not found at: {src_path}")
+        return
+
+    print(f"🔍 Scanning for vcpkg dependencies in: {src_path}")
+
+    # Iterate over each item in the 'src' directory
+    for project_dir in src_path.iterdir():
+        # Process only if the item is a directory
+        if not project_dir.is_dir():
+            continue
+
+        release_yaml_path = project_dir / 'release.yaml'
+
+        # Check if 'release.yaml' exists in the subdirectory
+        if release_yaml_path.is_file():
+            try:
+                with open(release_yaml_path, 'r') as f:
+                    release_data = yaml.safe_load(f)
+
+                    # Ensure data was loaded and is a dictionary
+                    if release_data and isinstance(release_data, dict):
+                        # Safely get the list of dependencies, defaulting to an empty list
+                        dependencies = release_data.get('vcpkg_dependencies', [])
+
+                        if dependencies and isinstance(dependencies, list):
+                            print(f"  -> Found {len(dependencies)} dependencies in '{project_dir.name}'")
+                            # Merge the found dependencies into the main set
+                            vcpkg_dependencies.update(dependencies)
+
+            except yaml.YAMLError as e:
+                print(f"  -> ⚠️ Error parsing YAML in '{project_dir.name}': {e}")
+            except IOError as e:
+                print(f"  -> ⚠️ Error reading file in '{project_dir.name}': {e}")
+
+    return
+
+def generate_vcpkg_json():
+    """
+    Reads a vcpkg.json template, replaces a placeholder with dependencies,
+    and saves the new file.
+
+    Args:
+        script_directory (str): The absolute path to the script's directory.
+        vcpkg_dependencies (set): A set of strings representing vcpkg package names.
+    """
+    # Define the template and output file paths
+    script_path = Path(script_directory)
+    template_path = script_path / "templates" / "vcpkg.json"
+    output_path = script_path / "vcpkg.json"
+
+    # --- 1. Format the dependencies ---
+    # Convert the set of dependencies into a single, comma-separated string
+    # where each item is enclosed in double quotes.
+    # e.g., {'fmt', 'spdlog'} -> '"fmt", "spdlog"'
+    deps_string = ", ".join(f'"{dep}"' for dep in sorted(list(vcpkg_dependencies)))
+
+    try:
+        # --- 2. Read the template file ---
+        print(f"Reading template from: {template_path}")
+        with open(template_path, "r", encoding="utf-8") as f:
+            template_content = f.read()
+
+        # --- 3. Replace the placeholder ---
+        new_content = template_content.replace("@@DEP@@", deps_string)
+
+        # --- 4. Write to the output file ---
+        # Using "w" mode will create the file or overwrite it if it already exists.
+        print(f"Writing new vcpkg.json to: {output_path}")
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write(new_content)
+
+        print("✅ Successfully generated vcpkg.json.")
+
+    except FileNotFoundError:
+        print(f"❌ Error: Template file not found at {template_path}")
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
 
 def setup(package_name = "", build_type = "", build_dir = ""):
     """
@@ -1264,6 +1382,8 @@ def setup(package_name = "", build_type = "", build_dir = ""):
                     Path(script_directory) / install_dir / 'generated', dirs_exist_ok=True)
 
     deploy_install_packages()
+    collect_src_vcpkg_dependencies()
+    generate_vcpkg_json()
 
 def release(target, build_type):
     """
@@ -1299,8 +1419,25 @@ def release(target, build_type):
                 os.makedirs(build_dir / "build", exist_ok=True)
 
                 print("⚙️  Running CMake...")
-                cmake_command = ["cmake", "../../../..", "-G Ninja", f"-DCMAKE_INSTALL_PREFIX={install_dir}", f"-DCMAKE_BUILD_TYPE={build_type}", "-DRAISIN_RELEASE_BUILD=ON"]
-                subprocess.run(cmake_command, cwd=build_dir / "build", check=True, capture_output=True, text=True)
+                cmake_command = ["cmake", "../../../..", "-G", "Ninja", f"-DCMAKE_INSTALL_PREFIX={install_dir}", f"-DCMAKE_BUILD_TYPE={build_type}", "-DRAISIN_RELEASE_BUILD=ON"]
+
+                if ninja_path:
+                    cmake_command.append(f"-DCMAKE_MAKE_PROGRAM={ninja_path}")
+
+                # Start with the common arguments for subprocess.run
+                kwargs = {
+                    "cwd": build_dir / "build",
+                    "check": True,
+                    "capture_output": True,
+                    "text": True
+                }
+
+                # Conditionally add the 'env' argument ONLY if developer_env is not empty
+                if developer_env:
+                    kwargs["env"] = developer_env
+
+                subprocess.run(cmake_command, **kwargs)
+
                 print("✅ CMake configuration successful.")
 
                 print("🛠️  Building with Ninja...")
@@ -1318,10 +1455,14 @@ def release(target, build_type):
                 version = details.get('version', '0.0.0')
                 archive_name_base = f"{target}-{os_type}-{os_version}-{architecture}-{build_type}-v{version}"
                 release_dir = Path(script_directory) / 'release'
-                archive_file = release_dir / (archive_name_base + '.zip')
+                archive_file = release_dir / archive_name_base
                 print(f"📦 Compressing '{install_dir}'...")
-                subprocess.run(['zip', '-r', str(archive_file), '.'], cwd=install_dir, check=True, capture_output=True)
-                print(f"✅ Successfully created archive: {archive_file}")
+                shutil.make_archive(
+                    base_name=str(archive_file),
+                    format='zip',
+                    root_dir=str(install_dir)
+                )
+                print(f"✅ Successfully created archive: {archive_file}.zip")
 
                 secrets_path = os.path.join(script_directory, 'secrets.yaml')
                 if not os.path.isfile(secrets_path):
@@ -1353,7 +1494,9 @@ def release(target, build_type):
                 auth_env = os.environ.copy()
                 auth_env["GH_TOKEN"] = token
                 tag_name = f"v{version}"
-                archive_filename = os.path.basename(archive_file)
+
+                archive_filename = os.path.basename(archive_file) + ".zip"
+                archive_file_str = str(archive_file) + ".zip"
 
                 # 1. Check if the release and asset already exist
                 release_exists = True
@@ -1378,7 +1521,7 @@ def release(target, build_type):
                 if not release_exists:
                     print(f"✅ Release '{tag_name}' does not exist. Creating a new one...")
                     gh_create_cmd = [
-                        "gh", "release", "create", tag_name, str(archive_file),
+                        "gh", "release", "create", tag_name, archive_file_str,
                         "--repo", repo_slug, "--title", f"Release {tag_name}",
                         "--notes", f"Automated release of version {version}."
                     ]
@@ -1389,7 +1532,7 @@ def release(target, build_type):
                     if prompt in ['y', 'yes']:
                         print(f"🚀 Overwriting asset...")
                         gh_upload_cmd = [
-                            "gh", "release", "upload", tag_name, str(archive_file),
+                            "gh", "release", "upload", tag_name, archive_file_str,
                             "--repo", repo_slug, "--clobber"
                         ]
                         subprocess.run(gh_upload_cmd, check=True, capture_output=True, text=True, env=auth_env)
@@ -1399,7 +1542,7 @@ def release(target, build_type):
                 else: # Release exists, but asset does not
                     print(f"🚀 Uploading new asset to existing release '{tag_name}'...")
                     gh_upload_cmd = [
-                        "gh", "release", "upload", tag_name, str(archive_file),
+                        "gh", "release", "upload", tag_name, archive_file_str,
                         "--repo", repo_slug
                     ]
                     subprocess.run(gh_upload_cmd, check=True, capture_output=True, text=True, env=auth_env)
@@ -2075,7 +2218,7 @@ def _normalize_arch(arch: str) -> str:
     }
     return mapping.get(m, arch)
 
-def get_os_info() -> Tuple[str, str, str]:
+def get_os_info() -> Tuple[str, str, str, str, str, dict]:
     """
     Returns (os_type, architecture, os_version) across Linux/macOS/Windows.
 
@@ -2092,6 +2235,9 @@ def get_os_info() -> Tuple[str, str, str]:
     """
     system = platform.system()
     arch = _normalize_arch(platform.machine())
+    vs_path2 = ""
+    ninja_path2 = ""
+    developer_env2 = dict()
 
     if system == "Linux":
         osr = _read_os_release()
@@ -2104,10 +2250,12 @@ def get_os_info() -> Tuple[str, str, str]:
         os_version2 = mac_release or platform.release()
 
     elif system == "Windows":
+        vs_path2, ninja_path2, developer_env2 = find_build_tools("x64")
         os_type2 = "windows"
         try:
             win = sys.getwindowsversion()  # (major, minor, build, platform, service_pack)
-            os_version2 = f"{win.major}.{win.minor}.{win.build}"
+            # os_version2 = f"{win.major}.{win.minor}.{win.build}"
+            os_version2 = "10or11"
         except Exception:
             release, version, _, _ = platform.win32_ver()
             os_version2 = version or release or platform.release()
@@ -2116,12 +2264,12 @@ def get_os_info() -> Tuple[str, str, str]:
         os_type2 = system.lower() if system else "unknown"
         os_version2 = platform.release()
 
-    return os_type2, arch, os_version2
+    return os_type2, arch, os_version2, vs_path2, ninja_path2, developer_env2
 
 
 if __name__ == '__main__':
-    script_directory = os.path.dirname(os.path.realpath(__file__))
-    os_type, architecture, os_version = get_os_info()
+    script_directory = Path(os.path.dirname(os.path.realpath(__file__))).as_posix()
+    os_type, architecture, os_version, visual_studio_path, ninja_path, developer_env = get_os_info()
 
     delete_directory(os.path.join(script_directory, 'temp'))
 
@@ -2262,18 +2410,27 @@ if __name__ == '__main__':
                              "-G", "Ninja",
                              f"-DCMAKE_BUILD_TYPE={build_type.upper()}",
                              ".."]
+            if ninja_path:
+                cmake_command.append(f"-DCMAKE_MAKE_PROGRAM={ninja_path}")
 
             core_count = int(os.cpu_count() / 2) or 4
             print(f"🛠️ Using {core_count} cores for the build.")
 
             try:
-                result = subprocess.run(
-                    cmake_command,
-                    cwd=build_dir,
-                    check=True,
-                    capture_output=True,
-                    text=True
-                )
+                # Start with the arguments that are always present
+                kwargs = {
+                    "cwd": build_dir,
+                    "check": True,
+                    "capture_output": True,
+                    "text": True
+                }
+
+                # Only add the 'env' argument if developer_env is not empty
+                if developer_env:
+                    kwargs["env"] = developer_env
+
+                # Call the command by unpacking the arguments dictionary
+                result = subprocess.run(cmake_command, **kwargs)
                 print("✅ CMake configured successfully!")
                 print(result.stdout)
 
