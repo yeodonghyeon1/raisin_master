@@ -12,7 +12,7 @@ target_include_directories(${PROJECT_NAME}
         $<INSTALL_INTERFACE:include>)
 
 target_link_libraries(${PROJECT_NAME} raisin_gui_base)
-target_compile_options(${PROJECT_NAME} PRIVATE -fPIC)
+set_target_properties(${PROJECT_NAME} PROPERTIES POSITION_INDEPENDENT_CODE TRUE)
 
 install(TARGETS ${PROJECT_NAME}
         EXPORT export_${PROJECT_NAME}

@@ -1432,7 +1432,13 @@ def release(target, build_type):
                 os.makedirs(build_dir / "build", exist_ok=True)
 
                 print("⚙️  Running CMake...")
-                cmake_command = ["cmake", "../../../..", "-G", "Ninja", f"-DCMAKE_INSTALL_PREFIX={install_dir}", f"-DCMAKE_BUILD_TYPE={build_type}", "-DRAISIN_RELEASE_BUILD=ON"]
+
+                cmake_command = []
+
+                if platform.system().lower() == "linux":
+                    cmake_command = ["cmake", "../../../..", "-G", "Ninja", f"-DCMAKE_INSTALL_PREFIX={install_dir}", f"-DCMAKE_BUILD_TYPE={build_type}", "-DRAISIN_RELEASE_BUILD=ON"]
+                else:
+                    cmake_command = ["cmake", script_directory, "--preset", build_type.lower(), "-B", build_dir / "build", f"-DCMAKE_INSTALL_PREFIX={install_dir}", "-DRAISIN_RELEASE_BUILD=ON"]
 
                 if ninja_path:
                     cmake_command.append(f"-DCMAKE_MAKE_PROGRAM={ninja_path}")
