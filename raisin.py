@@ -1201,7 +1201,7 @@ def deploy_install_packages():
                             Path(script_directory) / 'install/dependencies' / target_name / 'install_dependencies.sh')
 
         if deployed_targets:
-            print(f"\n✅ Successfully deployed {len(deployed_targets)} target(s).")
+            print(f"\n✅ Successfully deployed {deployed_targets} target(s).")
 
     except Exception as e:
         print(f"❌ An error occurred during deployment: {e}")
