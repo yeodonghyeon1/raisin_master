@@ -26,6 +26,7 @@ if (NOT WIN32)
     add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-Wno-reorder>)
 else ()
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /wd4267") # mute possible loss of data (precision mismatch)
+    add_definitions(-DWIN32_LEAN_AND_MEAN)
 endif()
 
 ## Top-level CMakeLists.txt
