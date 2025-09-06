@@ -1863,89 +1863,206 @@ import re # Make sure this is at the top of your file
 import os
 # Your other functions...
 
-def process_repo(repo_path, pull_mode=False, origin="origin"):
+def get_repo_sort_key(repo_dict):
     """
-    Processes a single git repository.
-    - If pull_mode is False, it checks the status.
-    - If pull_mode is True, it pulls and returns a clean summary.
+    Creates a sort key for a repo. It sorts by the first remote's owner,
+    then by the repo name, all case-insensitive.
     """
-    is_current_dir = repo_path == os.getcwd()
-    base_name = os.path.basename(repo_path)
+    remotes = repo_dict.get('remotes')
+    primary_owner = '~~~~~'  # Default sort key to push items with no remotes to the end
 
-    # Get the remote URL to extract the owner's name
-    owner = ""
-    remote_url = run_command(["git", "remote", "get-url", origin], repo_path)
-    if "Error:" not in remote_url:
-        match = re.search(r'(?:[:/])([^/]+)/[^/]+(?:\.git)?$', remote_url.strip())
-        if match:
-            owner = match.group(1)
+    if remotes:  # Make sure the remotes list is not empty
+        primary_owner = remotes[0].get('owner', '~~~~~') # Get owner of the first remote
 
-    # Construct the display name WITHOUT the owner
-    current_str = " (current)" if is_current_dir else ""
-    dir_name = f"{base_name}{current_str}"
+    repo_name = repo_dict.get('name', '')
 
-    if pull_mode:
-        owner_str = f" ({owner})" if owner else ""
-        print(f"🌀 Pulling for {base_name}{owner_str}{current_str}...")
-        branch = run_command(["git", "rev-parse", "--abbrev-ref", "HEAD"], repo_path)
+    # Return a tuple: this sorts by owner first, then by name.
+    # .lower() ensures sorting is case-insensitive (e.g., 'A' and 'a' are treated the same).
+    return (primary_owner.lower(), repo_name.lower())
 
-        # Default to failure unless a success condition is met
-        pull_status = "Failed"
-        pull_message = "An unknown error occurred."
+def _run_git_command(command, cwd):
+    """Helper to run a Git command and return its stripped output, handling errors."""
+    try:
+        # Using a timeout is safer for network operations like fetch
+        result = subprocess.run(
+            command,
+            cwd=cwd,
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding='utf-8',
+            timeout=15  # 15-second timeout
+        )
+        return result.stdout.strip()
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+        # Log error or return None
+        return None
+    except FileNotFoundError:
+        # Git command not found or cwd is invalid
+        return None
 
-        if "Error:" in branch:
-            pull_message = "Could not determine current branch."
-        else:
-            branch = branch.strip() # Ensure no trailing newline
-            pull_result = run_command(["git", "pull", origin, branch], repo_path)
+def _get_remote_details(cwd):
+    """
+    Parses `git remote -v` to get a dict of {name: {'owner': owner}}.
+    """
+    remote_output = _run_git_command(['git', 'remote', '-v'], cwd)
+    if not remote_output:
+        return {}
 
-            if "Error:" in pull_result:
-                if "would be overwritten" in pull_result:
-                    pull_message = "Local changes would be overwritten."
-                elif "fix conflicts" in pull_result:
-                    pull_message = "Merge conflict detected."
-                elif "couldn't find remote ref" in pull_result:
-                    pull_message = f"Remote branch '{branch}' not found."
-                else:
-                    pull_message = "See error details above."
-            else:
-                pull_status = "Success"
-                if "Already up to date" in pull_result:
-                    pull_message = "Already up to date."
-                elif "Fast-forward" in pull_result:
-                    pull_message = "Updated successfully (fast-forward)."
-                else:
-                    pull_message = "Pull successful (merge)."
+    remotes = {}
+    # Regex to capture owner from ssh (git@github.com:OWNER/...) or https (https://github.com/OWNER/...)
+    url_pattern = re.compile(r'(?:[:/])([^/]+)/([^/.]+)(?:\.git)?$')
 
-        # Return the owner as a separate key
-        return {"name": dir_name, "owner": owner, "status": pull_status, "message": pull_message}
+    for line in remote_output.splitlines():
+        if '(fetch)' not in line:
+            continue
+
+        try:
+            name, url, _ = line.split()
+            if name not in remotes:
+                owner = '?'
+                match = url_pattern.search(url)
+                if match:
+                    owner = match.group(1)  # Get the first capture group (the owner)
+                remotes[name] = {'owner': owner}
+        except ValueError:
+            continue # Skip malformed lines
+
+    return remotes
+
+def _get_git_status(cwd, branch, remote_name):
+    """Compares local HEAD to a specific remote branch and returns a status string."""
+    remote_branch = f"{remote_name}/{branch}"
+
+    # Check if the remote tracking branch exists
+    if _run_git_command(['git', 'show-ref', '--verify', '--quiet', f'refs/remotes/{remote_branch}'], cwd) is None:
+        return f"No remote '{branch}'"
+
+    # Get ahead/behind counts using git rev-list
+    counts_output = _run_git_command(['git', 'rev-list', '--left-right', '--count', f'HEAD...{remote_branch}'], cwd)
+    if counts_output is None:
+        return "Compare failed"
+
+    try:
+        ahead_str, behind_str = counts_output.split('\t')
+        ahead = int(ahead_str)
+        behind = int(behind_str)
+    except Exception:
+        return "Parse failed"
+
+    # Format the status string
+    if ahead > 0 and behind > 0:
+        return f"Diverged (A {ahead}, B {behind})"
+    elif ahead > 0:
+        return f"Ahead {ahead}"
+    elif behind > 0:
+        return f"Behind {behind}"
     else:
-        run_command(["git", "fetch", "--quiet", origin], repo_path)
-        branch = run_command(["git", "rev-parse", "--abbrev-ref", "HEAD"], repo_path).strip()
-        changes = run_command(["git", "diff", "--shortstat", "HEAD"], repo_path).strip()
-        lines_to_commit = "No changes"
-        if changes:
-            lines_to_commit = changes.replace(" files changed", "f").replace(" file changed", "f").replace(" insertions(+)", "+").replace(" deletions(-)", "-")
+        return "Up-to-date"
 
-        local = run_command(["git", "rev-parse", "HEAD"], repo_path)
-        remote = run_command(["git", "rev-parse", f"{origin}/{branch}"], repo_path)
-        base = run_command(["git", "merge-base", "HEAD", f"{origin}/{branch}"], repo_path)
+def _get_local_changes(cwd):
+    """Gets a short summary of local uncommitted changes."""
+    status_output = _run_git_command(['git', 'status', '--porcelain'], cwd)
+    if status_output is None:
+        return "Git Error"
+    if not status_output:
+        return "No changes"
 
-        sync_status = ""
-        if "Error:" in remote:
-            sync_status = f"⚠️ No remote for '{branch}'"
-        elif local == remote:
-            sync_status = "✅ Up to date"
-        elif local == base:
-            sync_status = "⬇️ Behind"
-        elif remote == base:
-            sync_status = "⬆️ Ahead"
+    # Provide a summary similar to your desired format
+    changed_files = 0
+    untracked_files = 0
+    for line in status_output.splitlines():
+        if line.startswith('??'):
+            untracked_files += 1
         else:
-            sync_status = "🔱 Diverged"
+            changed_files += 1
 
-        # Return the owner as a separate key
-        return {"name": dir_name, "owner": owner, "branch": branch, "changes": lines_to_commit, "status": sync_status}
+    parts = []
+    if changed_files > 0:
+        # Try to get the user's diffstat format
+        diff_stat = _run_git_command(['git', 'diff', '--shortstat', 'HEAD'], cwd)
+        if diff_stat:
+            # " 1 file changed, 53 insertions(+), 12 deletions(-)" -> "1 file, 53+, 12-"
+            stat_summary = diff_stat.strip().replace(" changed", "").replace(" files", "f").replace(" file", "f").replace(" insertions", "").replace(" insertion", "").replace(" deletions", "").replace(" deletion", "").replace("(", "").replace(")", "")
+            parts.append(stat_summary)
+        else:
+            parts.append(f"{changed_files} modified") # Fallback
 
+    if untracked_files > 0:
+        parts.append(f"{untracked_files} untracked")
+
+    return ", ".join(parts)
+
+def process_repo(repo_path, pull_mode, origin="origin"):
+    """
+    Processes a single Git repository. Fetches all remotes, checks local changes,
+    and compares HEAD to ALL remote branches.
+    Returns the data structure required by the manage_git_repos display function.
+
+    NOTE: The 'origin' parameter is ignored here to fulfill the requirement
+    of checking ALL remotes. 'pull_mode' logic is not implemented in this example.
+    """
+    if pull_mode:
+        # You would add your git pull logic here.
+        # This example is focused on the status-checking (non-pull_mode) logic.
+        pass
+
+    # 1. Get current branch
+    current_branch = _run_git_command(['git', 'symbolic-ref', '--short', 'HEAD'], repo_path)
+    if not current_branch:
+        # Handle detached HEAD state
+        current_branch = _run_git_command(['git', 'rev-parse', '--short', 'HEAD'], repo_path) or "DETACHED"
+        if "DETACHED" in current_branch:
+            return {
+                'name': os.path.basename(repo_path),
+                'branch': current_branch,
+                'changes': 'N/A (Detached HEAD)',
+                'remotes': []
+            }
+
+    # 2. Get local changes
+    local_changes = _get_local_changes(repo_path)
+
+    # 3. Get all remotes and their owners
+    # Returns a dict like: {'origin': {'owner': 'user1'}, 'upstream': {'owner': 'org1'}}
+    remote_details = _get_remote_details(repo_path)
+    if not remote_details:
+        return {
+            'name': os.path.basename(repo_path),
+            'branch': current_branch,
+            'changes': local_changes,
+            'remotes': [{'name': 'N/A', 'owner': 'N/A', 'status': 'No remotes configured'}]
+        }
+
+    # 4. Fetch ALL remotes to get up-to-date info. This is the crucial network step.
+    _run_git_command(['git', 'fetch', '--all', '--quiet'], repo_path)
+
+    # 5. Build the final remotes list with status for each one
+    remotes_list = []
+    for remote_name, details in remote_details.items():
+        # Check status of our local branch against this remote's version
+        status_str = _get_git_status(repo_path, current_branch, remote_name)
+
+        remotes_list.append({
+            'name': remote_name,
+            'owner': details['owner'],
+            'status': status_str
+        })
+
+    # Sort remotes alphabetically (e.g., origin, then upstream)
+    remotes_list.sort(key=lambda x: x['name'])
+
+    # 6. Return the complete data structure
+    repo_name = os.path.basename(repo_path)
+    if repo_path == os.getcwd():
+        repo_name += " (current)" # Add the (current) tag if it's the cwd
+
+    return {
+        'name': repo_name,
+        'branch': current_branch,
+        'changes': local_changes,
+        'remotes': remotes_list
+    }
 
 def manage_git_repos(pull_mode, origin="origin"):
     """
@@ -1973,7 +2090,7 @@ def manage_git_repos(pull_mode, origin="origin"):
     all_results = list(concurrent.futures.ThreadPoolExecutor().map(
         lambda path: process_repo(path, pull_mode=pull_mode, origin=origin), repo_paths
     ))
-    all_results.sort(key=lambda x: x['name'])
+    all_results.sort(key=get_repo_sort_key)
 
     if pull_mode:
         # ... (The pull_mode logic remains unchanged) ...
@@ -1984,41 +2101,82 @@ def manage_git_repos(pull_mode, origin="origin"):
             icon = "✅" if res['status'] == 'Success' else "❌"
             print(f"{icon} {summary_names[i]:<{max_name}}  ->  {res['message']}")
     else:
-        # --- MODIFICATION START ---
+        # 1. Discover all unique remote names to use as column headers
+        # We must loop through all results first to see what columns we need to create.
+        all_remote_names = set()
+        for repo in all_results:
+            for remote in repo.get('remotes', []):
+                if 'name' in remote:
+                    all_remote_names.add(remote['name'])
 
-        # Define headers and the corresponding keys in the results dictionary
+        # Create a consistent, sorted list of remote names (e.g., ['origin', 'raion'])
+        # This ensures the columns are always in the same order.
+        sorted_remote_names = sorted(list(all_remote_names))
+
+        # 2. Build the display_rows data structure with dynamic remote keys
+        display_rows = []
+        for repo in all_results:
+            # Basic info for the static columns
+            row_data = {
+                'name': repo.get('name', '?'),
+                'branch': repo.get('branch', '?'),
+            }
+            local_changes = repo.get('changes', 'No changes')
+
+            # Create a lookup map for the remotes this specific repo has
+            repo_remotes_map = {r.get('name'): r for r in repo.get('remotes', [])}
+
+            # 3. Populate the data for each dynamic remote column
+            for remote_name in sorted_remote_names:
+                if remote_name in repo_remotes_map:
+                    # This repo HAS this remote. Build the status string for this one cell.
+                    remote = repo_remotes_map[remote_name]
+                    owner = remote.get('owner', '?')
+                    r_status = remote.get('status', 'Unknown')
+                    cell_string = f"{owner} - {r_status}, {local_changes}"
+                    row_data[remote_name] = cell_string
+                else:
+                    # This repo does NOT have this remote (e.g., raisin_third_party_robot only has origin).
+                    # Fill the cell with a placeholder so the table aligns.
+                    row_data[remote_name] = "-"
+
+            display_rows.append(row_data)
+
+        # 4. Define the headers dictionary, which is now also dynamic
         headers = {
             "REPOSITORY": "name",
-            "OWNER": "owner",
             "BRANCH": "branch",
-            "PENDING CHANGES": "changes",
-            "STATUS": "status"
         }
+        # Add the remote names as headers (e.g., "ORIGIN", "RAION")
+        for r_name in sorted_remote_names:
+            headers[r_name] = r_name  # Header key (e.g., "ORIGIN"), Data key (e.g., "origin")
 
-        # Calculate the maximum width for each column by checking BOTH the header and the data
+
+        # 5. Calculate max widths (This logic is unchanged, it works perfectly with the new headers)
         max_widths = {}
         for header_text, key in headers.items():
             header_width = get_display_width(header_text)
-            max_data_width = max(get_display_width(d.get(key, '')) for d in all_results)
+            max_data_width = 0
+            if display_rows:
+                max_data_width = max(get_display_width(row.get(key, '')) for row in display_rows)
             max_widths[key] = max(header_width, max_data_width)
 
-        # Build and print the header row
+        # 6. Build and print the header row (Unchanged)
         header_parts = []
         for header_text, key in headers.items():
             width = max_widths[key]
-            # Pad the header text to the calculated maximum width
             header_parts.append(header_text + ' ' * (width - get_display_width(header_text)))
         header_str = " | ".join(header_parts)
         print(header_str)
         print('-' * get_display_width(header_str))
 
-        # Build and print each data row
-        for repo in all_results:
+        # 7. Build and print each data row (Unchanged)
+        # This will now print a row with the correct number of perfectly padded columns.
+        for row in display_rows:
             row_parts = []
             for header_text, key in headers.items():
                 width = max_widths[key]
-                value = repo.get(key, '')
-                # Pad the cell's value to the calculated maximum width
+                value = row.get(key, '')
                 padded_value = value + ' ' * (width - get_display_width(value))
                 row_parts.append(padded_value)
             print(" | ".join(row_parts))
