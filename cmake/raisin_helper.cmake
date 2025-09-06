@@ -133,3 +133,13 @@ function(raisin_recommended_clang_tidy)
             "${CLANG_TIDY_EXE};${CLANG_TIDY_OPTS}"
             PARENT_SCOPE)
 endfunction()
+
+function(raisin_windows_export)
+    if (WIN32)
+        set_target_properties(${PROJECT_NAME} PROPERTIES
+                VS_DOTNET_DOCUMENTATION_FILE_PLATFORM_UPGRADE_NEEDED TRUE # A workaround for some CMake versions
+                WINDOWS_EXPORT_ALL_SYMBOLS TRUE # This is the key property
+        )
+        target_compile_options(${PROJECT_NAME} PRIVATE /utf-8)
+    endif ()
+endfunction()

@@ -71,3 +71,4 @@ secrets.yaml
 temp/*
 storage/*
 vcpkg.json
+vcpkg_installed/*
