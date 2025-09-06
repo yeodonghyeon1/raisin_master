@@ -1995,17 +1995,74 @@ def _get_local_changes(cwd):
 
 def process_repo(repo_path, pull_mode, origin="origin"):
     """
-    Processes a single Git repository. Fetches all remotes, checks local changes,
-    and compares HEAD to ALL remote branches.
-    Returns the data structure required by the manage_git_repos display function.
-
-    NOTE: The 'origin' parameter is ignored here to fulfill the requirement
-    of checking ALL remotes. 'pull_mode' logic is not implemented in this example.
+    Processes a single Git repository.
+    - IF pull_mode=True: Attempts to pull the specified 'origin' and returns a simple status dict.
+    - IF pull_mode=False: Fetches all remotes, checks local changes, and compares HEAD to ALL remote branches.
     """
+
+    repo_name = os.path.basename(repo_path)
+
+    # --- PATH 1: PULL MODE ---
+    # This logic now executes, returns the expected dict, and exits the function.
     if pull_mode:
-        # You would add your git pull logic here.
-        # This example is focused on the status-checking (non-pull_mode) logic.
-        pass
+        # Get owner details, since the summary print requires it.
+        remote_details = _get_remote_details(repo_path)
+        owner = remote_details.get(origin, {}).get('owner') # Safely get owner for the target origin
+
+        try:
+            # Attempt to get the current branch name to pull into.
+            current_branch = _run_git_command(['git', 'symbolic-ref', '--short', 'HEAD'], repo_path)
+            if not current_branch:
+                raise Exception("Detached HEAD: Cannot pull.") # Fail cleanly if detached
+
+            # Run the git pull command against the specified origin and branch.
+            # Using --ff-only is safest: it won't create merge commits and will fail if the pull isn't a simple fast-forward.
+            pull_result = _run_git_command(
+                ['git', 'pull', origin, current_branch, '--ff-only', '--quiet'],
+                repo_path
+            )
+
+            # _run_git_command should return stdout. If it's quiet, a successful pull returns an empty string
+            # or a summary, while "Already up to date." is a specific message.
+            # NOTE: git pull writes "Already up to date." to STDOUT, not stderr.
+            pull_result = pull_result.strip()
+
+            if "Already up to date." in pull_result or pull_result == "":
+                message = "Already up to date."
+            else:
+                # Any other output implies changes were pulled.
+                message = pull_result.split('\n')[-1].strip() # Get summary line
+
+            return {
+                'name': repo_name,
+                'owner': owner,
+                'status': 'Success',
+                'message': message
+            }
+
+        except Exception as e:
+            # This catches errors from _run_git_command (like a non-zero exit code) or our Exception above.
+            # We need to parse the error message from git.
+            error_message = str(e)
+            if hasattr(e, 'stderr') and e.stderr: # Handle subprocess.CalledProcessError
+                error_message = e.stderr.decode().strip().split('\n')[-1] # Get last meaningful error line
+            elif hasattr(e, 'stdout') and e.stdout: # Handle cases where git pull fails but writes to stdout
+                error_message = e.stdout.decode().strip().split('\n')[-1]
+
+            # Clean common git error prefixes
+            if error_message.startswith('fatal:'):
+                error_message = error_message[len('fatal: '):]
+
+            return {
+                'name': repo_name,
+                'owner': owner,
+                'status': 'Fail',
+                'message': error_message
+            }
+
+    # --- PATH 2: STATUS CHECK MODE ---
+    # This existing logic will only run if pull_mode is False.
+    # This block correctly returns the detailed status report.
 
     # 1. Get current branch
     current_branch = _run_git_command(['git', 'symbolic-ref', '--short', 'HEAD'], repo_path)
@@ -2014,7 +2071,7 @@ def process_repo(repo_path, pull_mode, origin="origin"):
         current_branch = _run_git_command(['git', 'rev-parse', '--short', 'HEAD'], repo_path) or "DETACHED"
         if "DETACHED" in current_branch:
             return {
-                'name': os.path.basename(repo_path),
+                'name': repo_name, # Use name we defined earlier
                 'branch': current_branch,
                 'changes': 'N/A (Detached HEAD)',
                 'remotes': []
@@ -2024,17 +2081,16 @@ def process_repo(repo_path, pull_mode, origin="origin"):
     local_changes = _get_local_changes(repo_path)
 
     # 3. Get all remotes and their owners
-    # Returns a dict like: {'origin': {'owner': 'user1'}, 'upstream': {'owner': 'org1'}}
     remote_details = _get_remote_details(repo_path)
     if not remote_details:
         return {
-            'name': os.path.basename(repo_path),
+            'name': repo_name,
             'branch': current_branch,
             'changes': local_changes,
             'remotes': [{'name': 'N/A', 'owner': 'N/A', 'status': 'No remotes configured'}]
         }
 
-    # 4. Fetch ALL remotes to get up-to-date info. This is the crucial network step.
+    # 4. Fetch ALL remotes to get up-to-date info.
     _run_git_command(['git', 'fetch', '--all', '--quiet'], repo_path)
 
     # 5. Build the final remotes list with status for each one
@@ -2049,14 +2105,10 @@ def process_repo(repo_path, pull_mode, origin="origin"):
             'status': status_str
         })
 
-    # Sort remotes alphabetically (e.g., origin, then upstream)
+    # Sort remotes alphabetically
     remotes_list.sort(key=lambda x: x['name'])
 
-    # 6. Return the complete data structure
-    repo_name = os.path.basename(repo_path)
-    if repo_path == os.getcwd():
-        repo_name += " (current)" # Add the (current) tag if it's the cwd
-
+    # 6. Return the complete data structure (for status check mode)
     return {
         'name': repo_name,
         'branch': current_branch,
@@ -2098,8 +2150,21 @@ def manage_git_repos(pull_mode, origin="origin"):
         summary_names = [f"{res['name']} ({res['owner']})" if res.get('owner') else res['name'] for res in all_results]
         max_name = max(len(name) for name in summary_names)
         for i, res in enumerate(all_results):
-            icon = "✅" if res['status'] == 'Success' else "❌"
-            print(f"{icon} {summary_names[i]:<{max_name}}  ->  {res['message']}")
+            # 1. Use .get('status')
+            # If 'status' key is missing, .get() returns None.
+            # Comparing (None == 'Success') is safely False, so icon correctly becomes "❌".
+            icon = "✅" if res.get('status') == 'Success' else "❌"
+
+            # 2. Make the message safe too, providing a default error message
+            # in case 'message' is also missing or res itself is None.
+            if res:
+                message = res.get('message', 'Processing failed: No message returned.')
+            else:
+                # This handles cases where process_repo returned None entirely
+                message = 'CRITICAL ERROR: Worker process returned None.'
+                icon = "❌"
+
+            print(f"{icon} {summary_names[i]:<{max_name}}  ->  {message}")
     else:
         # 1. Discover all unique remote names to use as column headers
         # We must loop through all results first to see what columns we need to create.
