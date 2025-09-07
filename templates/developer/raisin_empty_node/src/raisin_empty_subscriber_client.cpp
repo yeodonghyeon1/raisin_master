@@ -19,11 +19,11 @@ namespace raisin
 EmptySc::EmptySc(std::shared_ptr<Network> network, std::shared_ptr<Remote::Connection> connection) :
   Node(network) {
 
-  // create publisher
+  // create subscriber
   stringSubscriber_ = createSubscriber<std_msgs::msg::String>("string_message", connection,
                       std::bind(&EmptySc::messageCallback, this, std::placeholders::_1), "sc");
 
-  // create Service
+  // create client
   stringClient_ = createClient<std_srvs::srv::SetBool>("set_bool_service", connection, "sc");
   createTimedLoop("request_repeat", [this](){
       if (stringClient_ && stringClient_->isServiceAvailable()) {
