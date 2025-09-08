@@ -33,3 +33,7 @@ raisin_third_party_gui:
 raisin_ros2_messages:
   type: github
   url: "git@github.com:raionrobotics/raisin_ros2_messages_release.git"
+
+raisin_robot_packages:
+  type: github
+  url: "git@github.com:raionrobotics/raisin_robot_packages_release.git"
