@@ -1568,6 +1568,8 @@ def release(target, build_type):
                 elif asset_exists:
                     if not always_yes:
                         prompt = input(f"⚠️ Asset '{archive_filename}' already exists. Overwrite? (y/n): ").lower()
+                    else:
+                        prompt = 'y'
 
                     if prompt in ['y', 'yes']:
                         print(f"🚀 Overwriting asset...")
