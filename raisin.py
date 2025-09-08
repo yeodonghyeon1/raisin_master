@@ -10,7 +10,7 @@ import glob
 import yaml
 import fnmatch
 import concurrent.futures
-from typing import Tuple, Dict
+from typing import List, Tuple, Dict, Any, Iterable, Set, Optional
 from script.build_tools import find_build_tools
 
 from packaging.version import parse as parse_version, InvalidVersion
@@ -19,6 +19,17 @@ from packaging.specifiers import SpecifierSet
 import requests
 import json
 
+# --- NEW DEPENDENCY ---
+# This script now requires the 'packaging' library for version validation.
+# Install it via: pip install packaging
+try:
+    from packaging.requirements import Requirement
+    from packaging.version import Version, InvalidVersion
+    from packaging.specifiers import InvalidSpecifier
+except ImportError:
+    print("Error: 'packaging' library not found.")
+    print("Please install it running: pip install packaging")
+    exit(1)
 
 # Mapping of ROS message types to corresponding C++ types
 TYPE_MAPPING = {
@@ -39,6 +50,12 @@ TYPE_MAPPING = {
     'wstring': 'std::u16string',
 }
 
+class Colors:
+    GREEN = '\033[92m'  # Bright Green
+    BLUE = '\033[94m'   # Bright Blue
+    RED = '\033[91m'    # Bright Red
+    RESET = '\033[0m'   # Reset color to default
+
 STRING_TYPES = ['std::string', 'std::u16string']
 
 build_pattern = []
@@ -53,6 +70,8 @@ ninja_path = ""
 visual_studio_path = ""
 developer_env = dict()
 vcpkg_dependencies = set()
+
+always_yes = False
 
 def get_display_width(text):
     """
@@ -1547,7 +1566,9 @@ def release(target, build_type):
                     subprocess.run(gh_create_cmd, check=True, capture_output=True, text=True, env=auth_env)
                     print(f"✅ Successfully created new release and uploaded '{archive_filename}'.")
                 elif asset_exists:
-                    prompt = input(f"⚠️ Asset '{archive_filename}' already exists. Overwrite? (y/n): ").lower()
+                    if not always_yes:
+                        prompt = input(f"⚠️ Asset '{archive_filename}' already exists. Overwrite? (y/n): ").lower()
+
                     if prompt in ['y', 'yes']:
                         print(f"🚀 Overwriting asset...")
                         gh_upload_cmd = [
@@ -2556,12 +2577,258 @@ def get_os_info() -> Tuple[str, str, str, str, str, dict]:
 
     return os_type2, arch, os_version2, vs_path2, ninja_path2, developer_env2
 
+def find_target_yamls(priority_dir: Path, fallback_dir: Path) -> List[Tuple[str, Path, str]]:
+    """
+    Scans directories for 'release.yaml' files, tagging their origin.
+    (This function is unchanged from the previous step.)
+    """
+    targets: List[Tuple[str, Path, str]] = []
+    found_packages: Set[str] = set()
+
+    # 1. Scan the PRIORITY directory first (src)
+    if priority_dir.is_dir():
+        for item in priority_dir.iterdir():
+            if item.is_dir():
+                yaml_file = item / "release.yaml"
+                if yaml_file.is_file():
+                    pkg_name = item.name
+                    targets.append((pkg_name, yaml_file, "source"))
+                    found_packages.add(pkg_name)
+    else:
+        print(f"Warning: Priority directory not found, skipping: {priority_dir}")
+
+    # 2. Scan the FALLBACK directory (release/install)
+    if fallback_dir.is_dir():
+        for item in fallback_dir.iterdir():
+            if item.is_dir():
+                pkg_name = item.name
+                if pkg_name not in found_packages:
+                    yaml_file_release = item / os_type / os_version / architecture / "release/release.yaml"
+                    yaml_file_debug = item / os_type / os_version / architecture / "debug/release.yaml"
+                    if yaml_file_release.is_file():
+                        targets.append((pkg_name, yaml_file_release, "release"))
+                    elif yaml_file_debug.is_file():
+                        targets.append((pkg_name, yaml_file_release, "release"))
+    else:
+        print(f"Warning: Fallback directory not found, skipping: {fallback_dir}")
+
+    return targets
+
+def parse_package_yaml(pkg_name: str, yaml_path: Path) -> Tuple[str, str, Optional[List[str]]]:
+    """
+    Worker function for Pass 1 (Parse).
+    Parses a single YAML file and returns the RAW dependency list.
+
+    Returns:
+        A tuple: (package_name, version_string, raw_deps_list_or_None)
+    """
+    try:
+        with open(yaml_path, 'r', encoding='utf-8') as f:
+            data = yaml.safe_load(f)
+
+        if not isinstance(data, dict):
+            return (pkg_name, "ERROR", ["Invalid or empty YAML"])
+
+        version = str(data.get('version', 'N/A'))
+
+        # Get the raw list of dependencies (or None)
+        deps_list: Optional[List[str]] = data.get('dependencies')
+
+        return (pkg_name, version, deps_list)
+
+    except yaml.YAMLError as e:
+        return (pkg_name, "ERROR", [f"YAML Parse Error: {e}"])
+    except Exception as e:
+        return (pkg_name, "ERROR", [f"File Read Error: {e}"])
+
+def run_parallel_parse(targets: List[Tuple[str, Path, str]]) -> List[Tuple[str, str, Optional[List[str]], str]]:
+    """
+    Manages the first thread pool (Pass 1) to parse all files.
+
+    Returns:
+        List of tuples: [(pkg_name, ver_str, raw_deps_list, origin_tag), ...]
+    """
+    all_parse_results = []
+
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        futures_map = {
+            executor.submit(parse_package_yaml, pkg_name, yaml_path): (pkg_name, origin_tag)
+            for pkg_name, yaml_path, origin_tag in targets
+        }
+
+        for future in concurrent.futures.as_completed(futures_map):
+            pkg_name_for_error, origin = futures_map[future]
+            try:
+                # parser_result is (pkg_name, ver, deps_list)
+                parser_result = future.result()
+                all_parse_results.append(parser_result + (origin,))
+            except Exception as e:
+                print(f"Critical error processing package {pkg_name_for_error}: {e}")
+                all_parse_results.append((pkg_name_for_error, "CRITICAL ERROR", [str(e)], origin))
+
+    return all_parse_results
+
+# --- Pass 2: Validation Functions ---
+
+def process_and_color_deps(
+        pkg_name: str,
+        version: str,
+        deps_list: Optional[List[str]],
+        origin: str,
+        package_db: Dict[str, str]
+) -> Tuple[str, str, str, str]:
+    """
+    Worker function for Pass 2 (Validate).
+    Takes one package's raw deps and validates them against the complete DB.
+
+    Returns:
+        Final tuple for printing: (pkg_name, version, colored_deps_string, origin)
+    """
+
+    # If this package itself failed parsing (Pass 1), its version is "ERROR"
+    # and its "deps_list" is actually the error message. Color it all red.
+    if version == "ERROR":
+        deps_str = f"{Colors.RED}{', '.join(deps_list or ['Unknown Error'])}{Colors.RESET}"
+        return (pkg_name, version, deps_str, origin)
+
+    # If parsing was successful but there are no dependencies, return "None"
+    if not deps_list:
+        return (pkg_name, version, "None", origin)
+
+    # Begin validating the list of dependencies one by one
+    colored_deps = []
+    for dep_spec_string in deps_list:
+        try:
+            # Use 'packaging' library to parse the requirement string
+            # e.g., "pkg_b>=1.0.0,<2.0.0" or just "pkg_c"
+            req = Requirement(dep_spec_string)
+
+        except (InvalidSpecifier, Exception):
+            # Handle malformed requirement strings like "pkg_b>>>1"
+            colored_deps.append(f"{Colors.RED}{dep_spec_string} (Invalid Spec){Colors.RESET}")
+            continue
+
+        # 1. Check if the dependency EXISTS in our database
+        if req.name not in package_db:
+            colored_deps.append(f"{Colors.RED}{dep_spec_string} (Missing){Colors.RESET}")
+            continue
+
+        # 2. If it exists, check if the found version MATCHES the specifier
+        try:
+            actual_version_str = package_db[req.name]
+            actual_version = Version(actual_version_str)
+
+            # This is the core check using the 'packaging' library:
+            # req.specifier is a SpecifierSet object (e.g., ">=1.0.0,<2.0.0")
+            # The 'in' operator checks if the Version object satisfies the constraints.
+            # If the specifier is empty (e.g., just "pkg_c"), it matches any version.
+            if actual_version in req.specifier:
+                colored_deps.append(f"{Colors.GREEN}{dep_spec_string}{Colors.RESET}")
+            else:
+                # Found, but version is wrong (e.g., we require >=1.0 but found 0.9)
+                colored_deps.append(f"{Colors.RED}{dep_spec_string} (Wrong Version){Colors.RESET}")
+
+        except InvalidVersion:
+            # The dependency we found has an invalid version (e.g., "N/A" or "ERROR")
+            # It cannot satisfy any version requirement.
+            colored_deps.append(f"{Colors.RED}{dep_spec_string} (Dep has Invalid Ver: {actual_version_str}){Colors.RESET}")
+        except Exception as e:
+            # Catch-all for other unexpected validation errors
+            colored_deps.append(f"{Colors.RED}{dep_spec_string} (Check Error: {e}){Colors.RESET}")
+
+    # Join all the individually colored strings with a comma
+    final_deps_str = ", ".join(colored_deps)
+    return (pkg_name, version, final_deps_str, origin)
+
+
+def run_parallel_validation(
+        all_pkg_data: List[Tuple[str, str, Optional[List[str]], str]],
+        package_db: Dict[str, str]
+) -> List[Tuple[str, str, str, str]]:
+    """
+    Manages the second thread pool (Pass 2) to validate all dependencies.
+    """
+    final_print_data = []
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        futures_map = {
+            executor.submit(process_and_color_deps, name, ver, deps, origin, package_db): name
+            for name, ver, deps, origin in all_pkg_data
+        }
+
+        for future in concurrent.futures.as_completed(futures_map):
+            try:
+                # Result is the final 4-tuple for printing
+                result = future.result()
+                final_print_data.append(result)
+            except Exception as e:
+                pkg_name = futures_map[future]
+                print(f"Critical error during validation for {pkg_name}: {e}")
+
+    return final_print_data
+
+
+# --- Printing Function ---
+
+def print_aligned_results(results: List[Tuple[str, str, str, str]]):
+    """
+    Takes the final (colored) results and prints them in an aligned format.
+    This logic handles the color codes in the package prefix correctly.
+    """
+    if not results:
+        print("No package data to display.")
+        return
+
+    # --- Alignment Calculation (Pre-pass) ---
+    processed_data = []
+    max_name_len = 0
+    max_ver_len = 0
+
+    for name, ver, colored_deps_str, origin in results:
+        raw_full_name = f"({origin}) {name}"
+        processed_data.append((raw_full_name, ver, colored_deps_str, origin))
+
+        if len(raw_full_name) > max_name_len:
+            max_name_len = len(raw_full_name)
+        if len(ver) > max_ver_len:
+            max_ver_len = len(ver)
+
+
+    # --- Print Header and Results ---
+    print("\n--- Package Version Report ---")
+    for raw_name, ver, colored_deps_str, origin in processed_data:
+
+        padded_raw_name = f"{raw_name:<{max_name_len}}"
+
+        if origin == "source":
+            color = Colors.GREEN
+            tag = "(source)"
+        else: # origin == "release"
+            color = Colors.BLUE
+            tag = "(release)"
+
+        # Replace the raw tag with the colored one to preserve alignment
+        colored_name = padded_raw_name.replace(
+            tag,
+            f"{color}{tag}{Colors.RESET}"
+        )
+
+        padded_ver = f"{ver:<{max_ver_len}}"
+
+        # Print the final line. The dependency string is the last column,
+        # so its variable visual length (due to color codes) is fine.
+        print(f"{colored_name} , version: {padded_ver} , dependencies: {colored_deps_str}")
+
+
 
 if __name__ == '__main__':
     script_directory = Path(os.path.dirname(os.path.realpath(__file__))).as_posix()
     os_type, architecture, os_version, visual_studio_path, ninja_path, developer_env = get_os_info()
 
     delete_directory(os.path.join(script_directory, 'temp'))
+
+    always_yes = '--yes' in sys.argv
+    if always_yes:
+        sys.argv.remove('--yes')
 
     # Display help if no arguments are given or if help is explicitly requested
     if len(sys.argv) == 2 and sys.argv[1] in ['help', '-h', '--help']:
@@ -2633,7 +2900,7 @@ if __name__ == '__main__':
                     release(target, build_type)
 
     elif sys.argv[1] == 'index':
-        if len(sys.argv) >= 3 and sys.argv[2] == 'versions':
+        if len(sys.argv) >= 3 and sys.argv[2] == 'release':
             # Case 1: Package name is provided, list its versions
             if len(sys.argv) == 4:
                 package_name = sys.argv[3]
@@ -2643,8 +2910,35 @@ if __name__ == '__main__':
                 list_all_available_packages()
             else:
                 print("❌ Error: Invalid 'index versions' command. Provide zero or one package name.")
+        elif len(sys.argv) >= 3 and sys.argv[2] == 'local':
+            targets_to_process = find_target_yamls(Path(script_directory) / 'src',
+                                                   Path(script_directory) / 'release' / 'install')
+
+            if not targets_to_process:
+                print("Found no packages with release.yaml files in specified locations.")
+
+            # 2. PASS 1: Run parallel parsing
+            # all_parse_results format: [(name, ver, raw_deps_list, origin), ...]
+            all_parse_results = run_parallel_parse(targets_to_process)
+
+            # 3. Build the Package Database for validation
+            # This map contains ONLY valid packages that can be dependencies.
+            package_db: Dict[str, str] = {}
+            for name, ver, deps_list, origin in all_parse_results:
+                if ver not in ("ERROR", "N/A"):
+                    package_db[name] = ver
+
+            # 4. PASS 2: Run parallel validation using the database
+            # final_print_data format: [(name, ver, colored_deps_str, origin), ...]
+            final_print_data = run_parallel_validation(all_parse_results, package_db)
+
+            # 5. Sort the final list alphabetically
+            final_print_data.sort(key=lambda x: x[0])
+
+            # 6. Print the aligned, colored results
+            print_aligned_results(final_print_data)
         else:
-            print("❌ Error: Invalid 'index' command. Use: index versions [package-name]")
+            print("❌ Error: Invalid 'index' command. Use: index remote or index local")
 
     elif sys.argv[1] == 'install':
         # Set default build type
