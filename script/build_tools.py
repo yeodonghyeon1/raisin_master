@@ -32,24 +32,26 @@ def find_visual_studio_path() -> Path:
 
 def get_developer_environment(vs_path: Path, arch: str) -> dict:
     """
-    Executes vcvarsall.bat and captures the resulting environment variables.
+    Executes vcvarsall.bat and captures the resulting, complete environment.
     """
     vcvarsall_path = vs_path / "VC/Auxiliary/Build/vcvarsall.bat"
     if not vcvarsall_path.exists():
         raise FileNotFoundError(f"vcvarsall.bat not found at {vcvarsall_path}")
 
+    # The command remains the same: run vcvarsall.bat and then print the environment
     command = f'"{vcvarsall_path}" {arch} && set'
     result = subprocess.run(command, shell=True, capture_output=True, text=True, check=True)
 
+    # THE FIX: Start with a blank dictionary, not a copy of os.environ.
+    # The 'set' command provides the *entire* correct environment.
     env = {}
     for line in result.stdout.splitlines():
         if '=' in line:
+            # This logic correctly handles variables that might contain '=' in their value
             key, value = line.split('=', 1)
             env[key] = value
 
-    full_env = os.environ.copy()
-    full_env.update(env)
-    return full_env
+    return env
 
 def find_build_tools(arch: str) -> Tuple[str, str, dict]:
     """
@@ -63,4 +65,5 @@ def find_build_tools(arch: str) -> Tuple[str, str, dict]:
     if not ninja_path_str:
         raise FileNotFoundError("ninja.exe could not be found in the developer environment PATH.")
 
-    return str(vs_path.as_posix()), str(Path(ninja_path_str).as_posix()), developer_env
+    # Return the native string paths without conversion
+    return str(vs_path), ninja_path_str, developer_env

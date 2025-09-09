@@ -1433,37 +1433,45 @@ def release(target, build_type):
 
                 print("⚙️  Running CMake...")
 
-                cmake_command = []
-
                 if platform.system().lower() == "linux":
-                    cmake_command = ["cmake", "../../../..", "-G", "Ninja", f"-DCMAKE_INSTALL_PREFIX={install_dir}", f"-DCMAKE_BUILD_TYPE={build_type}", "-DRAISIN_RELEASE_BUILD=ON"]
+                    cmake_command = ["cmake",
+                                     "-S", script_directory,
+                                     "-G", "Ninja",
+                                     "-B", build_dir / "build",
+                                     f"-DCMAKE_INSTALL_PREFIX={install_dir}",
+                                     f"-DCMAKE_BUILD_TYPE={build_type}",
+                                     "-DRAISIN_RELEASE_BUILD=ON"]
+                    subprocess.run(cmake_command, check=True, text=True)
+                    print("✅ CMake configuration successful.")
+                    print("🛠️  Building with Ninja...")
+                    core_count = int(os.cpu_count() / 2) or 4
+                    print(f"🔩 Using {core_count} cores for the build.")
+                    build_command = ["ninja", "install", f"-j{core_count}"]
+
+                    subprocess.run(build_command, cwd=build_dir / "build", check=True, text=True)
                 else:
-                    cmake_command = ["cmake", script_directory, "--preset", build_type.lower(), "-B", build_dir / "build", f"-DCMAKE_INSTALL_PREFIX={install_dir}", "-DRAISIN_RELEASE_BUILD=ON"]
+                    cmake_command = ["cmake",
+                                     "--preset", build_type.lower(),
+                                     "-S", script_directory,
+                                     "-B", build_dir / "build",
+                                     f"-DCMAKE_TOOLCHAIN_FILE={script_directory}/vcpkg/scripts/buildsystems/vcpkg.cmake",
+                                     f"-DCMAKE_INSTALL_PREFIX={install_dir}",
+                                     "-DRAISIN_RELEASE_BUILD=ON",
+                                     *( [f"-DCMAKE_MAKE_PROGRAM={ninja_path}"] if ninja_path else [] ),]
+                    subprocess.run(cmake_command, check=True, text=True, env=developer_env)
+                    print("✅ CMake configuration successful.")
+                    print("🛠️  Building with Ninja...")
 
-                if ninja_path:
-                    cmake_command.append(f"-DCMAKE_MAKE_PROGRAM={ninja_path}")
+                    subprocess.run(
+                        ["cmake", "--build", str(build_dir / "build"), "--parallel"],
+                        check=True, text=True, env=developer_env
+                    )
 
-                # Start with the common arguments for subprocess.run
-                kwargs = {
-                    "cwd": build_dir / "build",
-                    "check": True,
-                    "capture_output": True,
-                    "text": True
-                }
+                    subprocess.run(
+                        ["cmake", "--install", str(build_dir / "build")],
+                        check=True, text=True, env=developer_env
+                    )
 
-                # Conditionally add the 'env' argument ONLY if developer_env is not empty
-                if developer_env:
-                    kwargs["env"] = developer_env
-
-                subprocess.run(cmake_command, **kwargs)
-
-                print("✅ CMake configuration successful.")
-
-                print("🛠️  Building with Ninja...")
-                core_count = int(os.cpu_count() / 2) or 4
-                print(f"🔩 Using {core_count} cores for the build.")
-                build_command = ["ninja", "install", f"-j{core_count}"]
-                subprocess.run(build_command, cwd=build_dir / "build", check=True, capture_output=True, text=True)
                 print(f"✅ Build for '{target}' complete!")
 
                 shutil.copy(Path(script_directory) / 'src' / target / 'release.yaml', Path(install_dir) / 'release.yaml')
@@ -2540,7 +2548,7 @@ def get_os_info() -> Tuple[str, str, str, str, str, dict]:
         os_version2 = mac_release or platform.release()
 
     elif system == "Windows":
-        vs_path2, ninja_path2, developer_env2 = find_build_tools("x64")
+        vs_path2, ninja_path2, developer_env2 = find_build_tools("amd64")
         os_type2 = "windows"
         try:
             win = sys.getwindowsversion()  # (major, minor, build, platform, service_pack)

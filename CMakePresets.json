@@ -5,10 +5,10 @@
       "name": "base",
       "hidden": true,
       "generator": "Ninja",
-      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+      "toolchainFile": "${sourceDir}/scripts/buildsystems/vcpkg.cmake",
       "cacheVariables": {
         "X_VCPKG_APPLOCAL_DEPS_INSTALL": true,
-        "CMAKE_INSTALL_PREFIX": "${sourceDir}/_install/${presetName}"
+        "CMAKE_INSTALL_PREFIX": "${sourceDir}/install"
       }
     },
     {
