@@ -3045,6 +3045,7 @@ if __name__ == '__main__':
                                  "-B", build_dir / "build",
                                  f"-DCMAKE_TOOLCHAIN_FILE={script_directory}/vcpkg/scripts/buildsystems/vcpkg.cmake",
                                  "-DRAISIN_RELEASE_BUILD=ON",
+                                 "-DVCPKG_INSTALL_OPTIONS=--debug",
                                  *( [f"-DCMAKE_MAKE_PROGRAM={ninja_path}"] if ninja_path else [] ),]
                 subprocess.run(cmake_command, check=True, text=True, env=developer_env)
                 print("✅ CMake configuration successful.")
