@@ -1720,7 +1720,7 @@ def install(targets, build_type):
             continue
 
         # Priority 2: Check local source
-        local_src_path = script_dir_path / 'src' / package_name
+        local_src_path = script_dir_path / 'src'
         if check_local_package(local_src_path, "local source"):
             continue
 
