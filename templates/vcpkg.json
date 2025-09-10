@@ -1,5 +1,6 @@
 {
   "name": "raisin-master",
   "version-string": "0.0.0",
+  "builtin-baseline": "5ed70064390f11112c34b91a6382bba0fdc1706d",
   "dependencies": [@@DEP@@]
 }
