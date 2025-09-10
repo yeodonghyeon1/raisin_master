@@ -4,9 +4,6 @@ import shutil
 from pathlib import Path
 from typing import Tuple
 
-# --- Configuration ---
-BUILD_ARCHITECTURE = "x64" # Target architecture (e.g., x64, x86)
-
 def find_vswhere() -> Path:
     """Finds the vswhere.exe utility."""
     program_files_x86 = Path(os.environ.get("ProgramFiles(x86)", "C:/Program Files (x86)"))
