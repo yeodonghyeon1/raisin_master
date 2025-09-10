@@ -67,3 +67,10 @@ install(DIRECTORY generated/include/
 )
 
 @@SUB_PROJECT@@
+
+
+if (WIN32)
+    install(DIRECTORY "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/"
+            DESTINATION "."
+    )
+endif()

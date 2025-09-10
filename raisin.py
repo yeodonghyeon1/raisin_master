@@ -1577,7 +1577,7 @@ def release(target, build_type):
                     if not always_yes:
                         prompt = input(f"⚠️ Asset '{archive_filename}' already exists. Overwrite? (y/n): ").lower()
 
-                    if prompt in ['y', 'yes']:
+                    if always_yes or prompt in ['y', 'yes']:
                         print(f"🚀 Overwriting asset...")
                         gh_upload_cmd = [
                             "gh", "release", "upload", tag_name, archive_file_str,
@@ -1669,7 +1669,7 @@ def install(targets, build_type):
             if not spec_str:
                 spec = SpecifierSet(">=0.0.0")
             else:
-                specifiers_list = list(filter(None, re.split(r'\s*(?=[<>=!~])', spec_str)))
+                specifiers_list = re.findall(r'[<>=!~]+[\d.]+', spec_str)
                 formatted_spec_str = ', '.join(specifiers_list)
                 formatted_spec_str = formatted_spec_str.replace(">, =", ">=")
                 spec = SpecifierSet(formatted_spec_str)
@@ -2963,7 +2963,7 @@ if __name__ == '__main__':
             # 6. Print the aligned, colored results
             print_aligned_results(final_print_data)
         else:
-            print("❌ Error: Invalid 'index' command. Use: index remote or index local")
+            print("❌ Error: Invalid 'index' command. Use: index 'remote' or index 'local'")
 
     elif sys.argv[1] == 'install':
         # Set default build type
@@ -3019,58 +3019,44 @@ if __name__ == '__main__':
                              "-G", "Ninja",
                              f"-DCMAKE_BUILD_TYPE={build_type.upper()}",
                              ".."]
-            if ninja_path:
-                cmake_command.append(f"-DCMAKE_MAKE_PROGRAM={ninja_path}")
+            if platform.system().lower() == "linux":
+                cmake_command = ["cmake",
+                                 "-S", script_directory,
+                                 "-G", "Ninja",
+                                 "-B", build_dir / "build",
+                                 f"-DCMAKE_BUILD_TYPE={build_type}"]
+                subprocess.run(cmake_command, check=True, text=True)
+                print("✅ CMake configuration successful.")
+                print("🛠️  Building with Ninja...")
+                core_count = int(os.cpu_count() / 2) or 4
+                print(f"🔩 Using {core_count} cores for the build.")
+                if to_install:
+                    build_command = ["ninja", "install", f"-j{core_count}"]
+                else:
+                    build_command = ["ninja", f"-j{core_count}"]
+                subprocess.run(build_command, cwd=build_dir / "build", check=True, text=True)
 
-            core_count = int(os.cpu_count() / 2) or 4
-            print(f"🛠️ Using {core_count} cores for the build.")
+            else:
+                cmake_command = ["cmake",
+                                 "--preset", build_type.lower(),
+                                 "-S", script_directory,
+                                 "-B", build_dir / "build",
+                                 f"-DCMAKE_TOOLCHAIN_FILE={script_directory}/vcpkg/scripts/buildsystems/vcpkg.cmake",
+                                 "-DRAISIN_RELEASE_BUILD=ON",
+                                 *( [f"-DCMAKE_MAKE_PROGRAM={ninja_path}"] if ninja_path else [] ),]
+                subprocess.run(cmake_command, check=True, text=True, env=developer_env)
+                print("✅ CMake configuration successful.")
+                print("🛠️  Building with Ninja...")
 
-            try:
-                # Start with the arguments that are always present
-                kwargs = {
-                    "cwd": build_dir,
-                    "check": True,
-                    "capture_output": True,
-                    "text": True
-                }
-
-                # Only add the 'env' argument if developer_env is not empty
-                if developer_env:
-                    kwargs["env"] = developer_env
-
-                # Call the command by unpacking the arguments dictionary
-                result = subprocess.run(cmake_command, **kwargs)
-                print("✅ CMake configured successfully!")
-                print(result.stdout)
-
-
-            except subprocess.CalledProcessError as e:
-                print(f"❌ CMake failed with exit code {e.returncode}:")
-                print(e.stderr)
-
-            print(f"🛠️ Running ninja build.")
-
-            # Dynamically set the job count '-j' for Ninja
-            build_command = ["ninja", f"-j{core_count}"]
-
-            if to_install:
-                build_command.append("install")
-
-            try:
                 subprocess.run(
-                    build_command,
-                    cwd=build_dir,
-                    check=True,
-                    capture_output=True,
-                    text=True
+                    ["cmake", "--build", str(build_dir / "build"), "--parallel"],
+                    check=True, text=True, env=developer_env
                 )
 
-            except FileNotFoundError:
-                print("❌ Error: 'ninja' command not found. Is Ninja installed and in your PATH?")
-                exit(1)
-
-            except subprocess.CalledProcessError as e:
-                print(f"❌ Ninja build failed with exit code {e.returncode}:\n{e.stderr}")
-                exit(1)
+                if to_install:
+                    subprocess.run(
+                        ["cmake", "--install", str(build_dir / "build")],
+                        check=True, text=True, env=developer_env
+                    )
 
         print("🎉🎉🎉 Building process finished successfully.")
