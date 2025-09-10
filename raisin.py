@@ -1720,8 +1720,12 @@ def install(targets, build_type):
             continue
 
         # Priority 2: Check local source
-        local_src_path = script_dir_path / 'src'
+        local_src_path = script_dir_path / 'src' / package_name
         if check_local_package(local_src_path, "local source"):
+            continue
+
+        if local_src_path.is_dir():
+            print(f"❌ Error: Different version of '{package_name}' exists in local source")
             continue
 
         # Priority 3: Find and install remote release
