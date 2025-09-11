@@ -143,3 +143,17 @@ function(raisin_windows_export)
         target_compile_options(${PROJECT_NAME} PRIVATE /utf-8)
     endif ()
 endfunction()
+
+macro(raisin_linux_only)
+    if(WIN32)
+        # This will return from the scope that *calls* the macro
+        return()
+    endif()
+endmacro()
+
+macro(raisin_windows_only)
+    if(NOT WIN32)
+        # This will return from the scope that *calls* the macro
+        return()
+    endif()
+endmacro()
