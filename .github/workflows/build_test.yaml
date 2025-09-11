@@ -1,0 +1,127 @@
+name: Release Third Party Packages
+
+# This workflow can be triggered manually from the Actions tab
+on:
+  workflow_dispatch:
+
+jobs:
+  release:
+    # Use a matrix strategy to run on multiple Ubuntu versions AND Windows
+    strategy:
+      fail-fast: false # Prevents one failure from cancelling all other matrix jobs
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04, windows-latest]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: ⚙️ Configure Git to use HTTPS with a token
+        run: git config --global url."https://x-access-token:${{ secrets.GH_TOKEN }}@github.com/".insteadOf "git@github.com:"
+        shell: bash
+
+      - name: 📥 Clone raisin_master repository
+        run: git clone git@github.com:raionrobotics/raisin_master.git
+        shell: bash
+
+      - name: 📂 Clone pkg repository
+        run: |
+          cd raisin_master
+          mkdir src
+          echo "Cloning dependent packages..."
+          git clone git@github.com:raionrobotics/raisin_third_party_common.git src/raisin_third_party_common
+          git clone git@github.com:raionrobotics/raisin_raisin_third_party_gui.git src/raisin_third_party_gui
+          git clone git@github.com:raionrobotics/raisin_third_party_robot.git src/raisin_third_party_robot
+          git clone git@github.com:raionrobotics/raisin_ros2_messages.git src/raisin_ros2_messages
+          git clone git@github.com:raionrobotics/raisin.git src/raisin
+          git clone git@github.com:raionrobotics/raisin_raibo2.git src/raisin_raibo2
+          git clone git@github.com:raionrobotics/raisin_plugin.git src/raisin_plugin
+          git clone git@github.com:raionrobotics/raibo_controller.git src/raibo_controller
+          git clone git@github.com:raionrobotics/raisin_gui.git src/raisin_gui
+          git clone git@github.com:raionrobotics/raisin_gui_map_window.git src/raisin_gui_map_window
+          git clone git@github.com:raionrobotics/raisin_robot_packages.git src/raisin_robot_packages
+          echo "Cloning complete."
+        shell: bash
+
+      - name: 🔑 Create secrets.yaml file
+        run: |
+          echo "Creating secrets.yaml..."
+          cat <<EOF > raisin_master/secrets.yaml
+          gh_tokens:
+            "raionrobotics": "${{ secrets.GH_TOKEN }}"
+          EOF
+          echo "secrets.yaml created successfully."
+        shell: bash # This step MUST use bash for the 'cat <<EOF' heredoc syntax
+
+      - name: 🐍 Set up Python environment
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: 🛠️ Install Python Dependencies
+        run: python -m pip install PyYAML packaging requests # Use 'python -m pip' for cross-OS compatibility
+        shell: bash
+
+      - name: 🚀 Release test base dependencies package
+        # ADD THIS ENV BLOCK:
+        env:
+          PYTHONUTF8: "1" # Forces Python to use UTF-8 for all standard I/O
+
+        run: |
+          cd raisin_master
+          
+          echo "Running initial raisin.py setup..."
+          python raisin.py
+          
+          # This dependency script is Linux-specific (likely runs apt-get)
+          # We will only run it on Linux runners.
+          if [[ "${{ runner.os }}" == "Linux" ]]; then
+            echo "Running Linux dependency installer..."
+            bash install/install_dependencies.sh
+          else
+            echo "Skipping .sh dependency installer on Windows."
+          fi
+          
+          echo "Running release command..."
+          python raisin.py release raisin_third_party_common --no
+          python raisin.py release raisin_third_party_gui --no
+          python raisin.py release raisin_ros2_messages --no
+
+
+      - name: 🚀 remove base dependencies package in source folder
+        env:
+          PYTHONUTF8: "1" # Forces Python to use UTF-8 for all standard I/O
+        run: |
+          cd raisin_master/src
+          echo "Removing base dependencies..."
+          rm -rf raisin_third_party_common
+          rm -rf raisin_third_party_gui
+          rm -rf raisin_ros2_messages
+          echo "Base dependencies removed successfully."
+        shell: bash
+
+      - name: 🚀 Release full build test package
+        env:
+          PYTHONUTF8: "1" # Forces Python to use UTF-8 for all standard I/O
+        run: |
+          cd raisin_master
+          echo "Running full build release install..."
+          python raisin.py build release install
+          
+      - name: 🧪 Test release for each package
+        env:
+          PYTHONUTF8: "1"
+        run: |
+          cd raisin_master
+          echo "Testing release for each package..."
+          
+          python raisin.py release raisin_third_party_robot --no
+          python raisin.py release raisin --no
+          python raisin.py release raisin_raibo2 --no
+          python raisin.py release raisin_plugin --no
+          python raisin.py release raibo_controller --no
+          python raisin.py release raisin_gui --no
+          python raisin.py release raisin_gui_map_window --no
+          python raisin.py release raisin_robot_packages --no
+          
+          echo "All packages tested successfully."
+        shell: bash
