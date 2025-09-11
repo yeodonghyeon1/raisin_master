@@ -3,7 +3,9 @@ name: Release Third Party Packages
 # This workflow can be triggered manually from the Actions tab
 on:
   workflow_dispatch:
-
+  push:
+    branches:
+      - '*'
 jobs:
   release:
     # Use a matrix strategy to run on multiple Ubuntu versions AND Windows
