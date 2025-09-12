@@ -1725,7 +1725,6 @@ def install(targets, build_type):
         local_src_path = script_dir_path / 'src' / package_name
         if check_local_package(local_src_path, "local source"):
             continue
-
         if local_src_path.is_dir():
             print(f"❌ Error: Different version of '{package_name}' exists in local source")
             continue
@@ -1933,6 +1932,30 @@ def get_repo_sort_key(repo_dict):
     # Return a tuple: this sorts by owner first, then by name.
     # .lower() ensures sorting is case-insensitive (e.g., 'A' and 'a' are treated the same).
     return (primary_owner.lower(), repo_name.lower())
+
+def _ensure_github_auth():
+    """Check if GitHub CLI is authenticated, and prompt login if not."""
+    try:
+        # Check if gh is installed
+        result = subprocess.run(['gh', '--version'], capture_output=True, text=True, timeout=5)
+        if result.returncode != 0:
+            print("GitHub CLI (gh) is not installed. Please install it first.")
+            return False
+            
+        # Check if authenticated
+        result = subprocess.run(['gh', 'auth', 'status'], capture_output=True, text=True, timeout=10)
+        if result.returncode == 0:
+            print("GitHub CLI is already authenticated.")
+            return True
+        else:
+            print("GitHub CLI is not authenticated. Starting authentication...")
+            # Run gh auth login interactively
+            result = subprocess.run(['gh', 'auth', 'login'], timeout=300)
+            return result.returncode == 0
+            
+    except (subprocess.TimeoutExpired, subprocess.CalledProcessError, FileNotFoundError):
+        print("Failed to check GitHub authentication status.")
+        return False
 
 def _run_git_command(command, cwd):
     """Helper to run a Git command and return its stripped output, handling errors."""
@@ -2991,6 +3014,10 @@ if __name__ == '__main__':
         install(targets, build_type)
 
     elif len(sys.argv) >= 3 and sys.argv[1] == 'git':
+        # Ensure GitHub authentication before any git operations
+        if not _ensure_github_auth():
+            print("Warning: GitHub authentication failed. Some operations may not work properly.")
+            
         if sys.argv[2] == 'status':
             manage_git_repos(pull_mode=False)
         if sys.argv[2] == 'pull':
