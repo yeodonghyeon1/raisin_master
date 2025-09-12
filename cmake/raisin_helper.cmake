@@ -1,6 +1,6 @@
 function(raisin_find_package package_name)
     if(NOT TARGET ${package_name})
-        find_package(${package_name} REQUIRED)
+        find_package(${package_name} ${ARGN})
     endif()
 endfunction()
 
