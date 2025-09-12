@@ -1406,14 +1406,16 @@ def setup(package_name = "", build_type = "", build_dir = ""):
     shutil.copy2(src_file, dest_dir)
 
     os.makedirs(Path(script_directory) / 'install', exist_ok=True)
-    shutil.copy2(Path(script_directory) / 'templates/install_dependencies.sh',
-                 Path(script_directory) / 'install/install_dependencies.sh')
 
     # install generated files
     shutil.copytree(Path(script_directory) / "generated",
                     Path(script_directory) / install_dir / 'generated', dirs_exist_ok=True)
 
     deploy_install_packages()
+
+    shutil.copy2(Path(script_directory) / 'templates/install_dependencies.sh',
+                 Path(script_directory) / 'install/install_dependencies.sh')
+
     collect_src_vcpkg_dependencies()
     generate_vcpkg_json()
 
