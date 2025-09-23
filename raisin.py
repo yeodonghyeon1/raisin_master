@@ -1933,33 +1933,32 @@ def get_repo_sort_key(repo_dict):
     # .lower() ensures sorting is case-insensitive (e.g., 'A' and 'a' are treated the same).
     return (primary_owner.lower(), repo_name.lower())
 
-def _ensure_github_auth():
-    """Check if GitHub CLI is authenticated, and prompt login if not."""
-    try:
-        # Check if gh is installed
-        result = subprocess.run(['gh', '--version'], capture_output=True, text=True, timeout=5)
-        if result.returncode != 0:
-            print("GitHub CLI (gh) is not installed. Please install it first.")
-            return False
+def _ensure_github_token():
+    """Load GitHub tokens from secrets.yaml."""
+    script_dir_path = Path(__file__).parent
+    tokens = {}
+    secrets_path = script_dir_path / 'secrets.yaml'
+    if secrets_path.is_file():
+        with open(secrets_path, 'r') as f:
+            secrets = yaml.safe_load(f)
+            tokens = secrets.get('gh_tokens', {})
             
-        # Check if authenticated
-        result = subprocess.run(['gh', 'auth', 'status'], capture_output=True, text=True, timeout=10)
-        if result.returncode == 0:
-            print("GitHub CLI is already authenticated.")
-            return True
-        else:
-            print("GitHub CLI is not authenticated. Starting authentication...")
-            # Run gh auth login interactively
-            result = subprocess.run(['gh', 'auth', 'login'], timeout=300)
-            return result.returncode == 0
-            
-    except (subprocess.TimeoutExpired, subprocess.CalledProcessError, FileNotFoundError):
-        print("Failed to check GitHub authentication status.")
-        return False
+    return tokens
 
 def _run_git_command(command, cwd):
     """Helper to run a Git command and return its stripped output, handling errors."""
     try:
+        # Set up environment with GitHub token for authentication
+        env = os.environ.copy()
+
+        tokens = _ensure_github_token()
+
+        if tokens:
+            token = next(iter(tokens.values()))
+            env['GIT_CONFIG_COUNT'] = '1'
+            env['GIT_CONFIG_KEY_0'] = 'credential.https://github.com.helper'
+            env['GIT_CONFIG_VALUE_0'] = f'!f() {{ echo "username={token}"; echo "password="; }}; f'
+
         # Using a timeout is safer for network operations like fetch
         result = subprocess.run(
             command,
@@ -1968,6 +1967,7 @@ def _run_git_command(command, cwd):
             capture_output=True,
             text=True,
             encoding='utf-8',
+            env=env,
             timeout=15  # 15-second timeout
         )
         return result.stdout.strip()
@@ -3015,9 +3015,7 @@ if __name__ == '__main__':
 
     elif len(sys.argv) >= 3 and sys.argv[1] == 'git':
         # Ensure GitHub authentication before any git operations
-        if not _ensure_github_auth():
-            print("Warning: GitHub authentication failed. Some operations may not work properly.")
-            
+
         if sys.argv[2] == 'status':
             manage_git_repos(pull_mode=False)
         if sys.argv[2] == 'pull':
