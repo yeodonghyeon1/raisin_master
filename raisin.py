@@ -2875,6 +2875,58 @@ def print_aligned_results(results: List[Tuple[str, str, str, str]]):
         print(f"{colored_name} , version: {padded_ver} , dependencies: {colored_deps_str}")
 
 
+def setup_git_remotes(remote_specs):
+    """
+    Finds all git repositories in the 'src' directory, removes all existing remotes,
+    and adds new ones based on the provided specifications.
+    """
+    try:
+        # Get the absolute path of the directory containing this script
+        script_directory = os.path.dirname(os.path.abspath(__file__))
+        src_directory = os.path.join(script_directory, 'src')
+
+        if not os.path.isdir(src_directory):
+            print(f"Error: 'src' directory not found at '{src_directory}'")
+            return
+
+        print(f"Scanning for git repositories in '{src_directory}'...")
+
+        # Iterate over all items in the 'src' directory
+        for repo_name in os.listdir(src_directory):
+            repo_path = os.path.join(src_directory, repo_name)
+
+            # Process only if it's a directory and a git repository
+            if os.path.isdir(repo_path) and os.path.isdir(os.path.join(repo_path, '.git')):
+                print(f"\n--- Configuring repository: {repo_name} ---")
+
+                # 1. Get and delete existing remotes
+                print("Checking for existing remotes...")
+                remotes_result = run_command(['git', 'remote'], cwd=repo_path)
+
+                if remotes_result:
+                    existing_remotes = remotes_result.strip().split('\n')
+                    for remote in existing_remotes:
+                        print(f"  - Removing existing remote: '{remote}'")
+                        run_command(['git', 'remote', 'remove', remote], cwd=repo_path)
+                else:
+                    print("  - No existing remotes found.")
+
+                # 2. Add new remotes
+                for spec in remote_specs:
+                    try:
+                        remote_name, user_or_org = spec.split(':', 1)
+                        # Construct the SSH URL for GitHub
+                        url = f"git@github.com:{user_or_org}/{repo_name}.git"
+                        print(f"  + Adding new remote: '{remote_name}' -> {url}")
+                        run_command(['git', 'remote', 'add', remote_name, url], cwd=repo_path)
+                    except ValueError:
+                        print(f"  ! Skipping malformed remote specification: '{spec}'. Expected format 'name:user'.")
+
+        print("\n✅ Git remote setup complete.")
+
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
+
 
 if __name__ == '__main__':
     script_directory = Path(os.path.dirname(os.path.realpath(__file__))).as_posix()
@@ -3023,6 +3075,13 @@ if __name__ == '__main__':
                 manage_git_repos(pull_mode=True, origin=sys.argv[3])
             else:
                 manage_git_repos(pull_mode=True)
+        elif sys.argv[2] == 'setup':
+            if len(sys.argv) < 4:
+                print("❌ Error: Please provide at least one remote specification.")
+                print("   Usage: python raisin.py git setup <name1:user1> <name2:user2> ...")
+            else:
+                remote_specs = sys.argv[3:]
+                setup_git_remotes(remote_specs)
 
     else:
         print("❌ Error: No command-line arguments were provided.")
