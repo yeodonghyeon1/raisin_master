@@ -1839,61 +1839,56 @@ def print_help():
     """Displays the comprehensive help message for the script."""
     script_name = os.path.basename(sys.argv[0])
     print(f"RAISIN Build & Management Tool 🍇")
-    print("="*60)
+    print("="*70)
     print(f"Usage: python {script_name} <command> [options]\n")
-    print("Global Options:")
-    print("  --yes")
-    print("    Answers 'yes' to all prompts, such as overwriting release assets.")
-    print("\n## Core Commands")
-    print("-" * 60)
-    print("  setup [target ...]")
-    print("    🛠️  Generates message headers and configures the main CMakeLists.txt")
-    print("        for a local development build. If [target...] is provided (e.g., 'core', 'gui'),")
-    print("        it configures only those targets and their dependencies (using RAISIN_BUILD_TARGETS.yaml).")
-    print("        If no targets are given, it configures all projects found in 'src/'.")
-    print("-" * 60)
-    print("  build <debug|release> [install]")
-    print("    ⚙️  Runs the 'setup' step, then compiles the project using Ninja.")
-    print("        The build type ('debug' or 'release') must be specified.")
-    print("        Optionally add 'install' to install artifacts to the 'install/' directory.")
-    print("-" * 60)
-    print("  release <target ...> [debug|release]")
-    print("    📦 Creates, archives, and uploads a distributable package for one or more")
-    print("        targets. Packages are built and placed in 'release/install/'")
-    print("        and the final ZIP is uploaded to the corresponding GitHub Release.")
-    print("        - Build type defaults to 'release' if not specified.")
-    print("-" * 60)
-    print("  install [package_spec ...] [debug|release]")
-    print("    🚀 Downloads and installs pre-compiled packages and their dependencies.")
-    print("        - If no packages are listed, it processes/installs all local 'src/' packages.")
-    print("        - A 'package_spec' supports version constraints (e.g., 'raisin_core>=1.2.3').")
-    print("        - Build type defaults to 'release' if not specified.")
-    print("\n## Utility Commands")
-    print("-" * 60)
-    print("  index local")
-    print("    ℹ️  Scans all local 'src/' and 'release/install/' packages, validates all")
-    print("        dependencies, and prints a colored report showing which dependencies")
-    print("        are satisfied (💚), missing (❤️), or have a version mismatch (❤️).")
-    print("-" * 60)
-    print("  index release")
-    print("    📜 Lists ALL available packages from all configured GitHub repositories")
-    print("        that have a compatible asset (for your OS/arch) on their latest release.")
-    print("-" * 60)
-    print("  index release <package-name>")
-    print("    📜 Lists ALL available versions for a SINGLE package from GitHub Releases")
-    print("        that have a compatible asset for the current system.")
-    print("-" * 60)
-    print("  git status")
-    print("    🔄 Fetches and shows the detailed sync status (ahead, behind, local changes)")
-    print("        for all repositories in the current directory and in 'src/'.")
-    print("-" * 60)
-    print("  git pull [origin]")
-    print("    🔄 Pulls changes for all local repositories from the specified remote")
-    print("        (defaults to 'origin').")
-    print("-" * 60)
-    print("  help, -h, --help")
-    print("    ❓ Displays this help message.")
-    print("="*60)
+
+    print("## Global Options")
+    print("-" * 70)
+    print(f"  {'--yes':<20} Answers 'yes' to all prompts, like overwriting release assets.")
+
+    print("\n## Build & Release Commands")
+    print("-" * 70)
+    print(f"  {'setup [target ...]':<20} 🛠️  Generates message headers and configures the main CMakeLists.txt.")
+    print(f"  {'':<22} If [target...] is provided, configures only those targets and their")
+    print(f"  {'':<22} dependencies. Otherwise, configures all projects in 'src/'.")
+    print("-" * 35)
+    print(f"  {'build <debug|release> [install]':<20} ⚙️  Runs the 'setup' step, then compiles the entire project using Ninja.")
+    print(f"  {'':<22} The build type ('debug' or 'release') must be specified.")
+    print(f"  {'':<22} Add 'install' to also install artifacts into the 'install/' directory.")
+    print("-" * 35)
+    print(f"  {'release <target ...> [debug|release]':<20} 📦 Builds, archives, and uploads a distributable package for specified targets.")
+    print(f"  {'':<22} Archives are uploaded to the corresponding GitHub Release.")
+    print(f"  {'':<22} Build type defaults to 'release' if not specified.")
+
+    print("\n## Package Management Commands")
+    print("-" * 70)
+    print(f"  {'install [pkg>=1.0] [debug|release]':<20} 🚀 Downloads and installs pre-compiled packages and dependencies.")
+    print(f"  {'':<22} If no packages are listed, it processes/installs all local 'src/' packages.")
+    print(f"  {'':<22} Supports version constraints (e.g., 'raisin_core>=1.2.3').")
+    print(f"  {'':<22} Build type defaults to 'release' if not specified.")
+    print("-" * 35)
+    print(f"  {'index local':<20} ℹ️  Scans local 'src/' and 'release/install/' packages and validates")
+    print(f"  {'':<22} their dependency graph, printing a colored report of the status.")
+    print("-" * 35)
+    print(f"  {'index release [<package_name>]':<20} 📜 Lists available remote packages from GitHub Releases.")
+    print(f"  {'':<22} Without a package name, it lists all packages.")
+    print(f"  {'':<22} With a package name, it lists all available versions for that package.")
+
+
+    print("\n## Git Integration Commands")
+    print("-" * 70)
+    print(f"  {'git status':<20} 🔄 Fetches and shows the detailed sync status for all local repositories.")
+    print("-" * 35)
+    print(f"  {'git pull [remote]':<20} ⬇️  Pulls changes for all local repositories from the specified remote")
+    print(f"  {'':<22} (defaults to 'origin').")
+    print("-" * 35)
+    print(f"  {'git setup <remote:user ...>':<20} 🔱 Clears all existing remotes and sets up new ones for all repos in 'src/'.")
+    print(f"  {'':<22} Example: 'git setup origin:raisim raion:raionrobotics'")
+
+    print("\n## Help")
+    print("-" * 70)
+    print(f"  {'help, -h, --help':<20} ❓ Displays this help message.")
+    print("="*70)
 
 def run_command(command, cwd):
     """A helper function to run a shell command in a specific directory."""
@@ -2875,6 +2870,58 @@ def print_aligned_results(results: List[Tuple[str, str, str, str]]):
         print(f"{colored_name} , version: {padded_ver} , dependencies: {colored_deps_str}")
 
 
+def setup_git_remotes(remote_specs):
+    """
+    Finds all git repositories in the 'src' directory, removes all existing remotes,
+    and adds new ones based on the provided specifications.
+    """
+    try:
+        # Get the absolute path of the directory containing this script
+        script_directory = os.path.dirname(os.path.abspath(__file__))
+        src_directory = os.path.join(script_directory, 'src')
+
+        if not os.path.isdir(src_directory):
+            print(f"Error: 'src' directory not found at '{src_directory}'")
+            return
+
+        print(f"Scanning for git repositories in '{src_directory}'...")
+
+        # Iterate over all items in the 'src' directory
+        for repo_name in os.listdir(src_directory):
+            repo_path = os.path.join(src_directory, repo_name)
+
+            # Process only if it's a directory and a git repository
+            if os.path.isdir(repo_path) and os.path.isdir(os.path.join(repo_path, '.git')):
+                print(f"\n--- Configuring repository: {repo_name} ---")
+
+                # 1. Get and delete existing remotes
+                print("Checking for existing remotes...")
+                remotes_result = run_command(['git', 'remote'], cwd=repo_path)
+
+                if remotes_result:
+                    existing_remotes = remotes_result.strip().split('\n')
+                    for remote in existing_remotes:
+                        print(f"  - Removing existing remote: '{remote}'")
+                        run_command(['git', 'remote', 'remove', remote], cwd=repo_path)
+                else:
+                    print("  - No existing remotes found.")
+
+                # 2. Add new remotes
+                for spec in remote_specs:
+                    try:
+                        remote_name, user_or_org = spec.split(':', 1)
+                        # Construct the SSH URL for GitHub
+                        url = f"git@github.com:{user_or_org}/{repo_name}.git"
+                        print(f"  + Adding new remote: '{remote_name}' -> {url}")
+                        run_command(['git', 'remote', 'add', remote_name, url], cwd=repo_path)
+                    except ValueError:
+                        print(f"  ! Skipping malformed remote specification: '{spec}'. Expected format 'name:user'.")
+
+        print("\n✅ Git remote setup complete.")
+
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
+
 
 if __name__ == '__main__':
     script_directory = Path(os.path.dirname(os.path.realpath(__file__))).as_posix()
@@ -3023,6 +3070,13 @@ if __name__ == '__main__':
                 manage_git_repos(pull_mode=True, origin=sys.argv[3])
             else:
                 manage_git_repos(pull_mode=True)
+        elif sys.argv[2] == 'setup':
+            if len(sys.argv) < 4:
+                print("❌ Error: Please provide at least one remote specification.")
+                print("   Usage: python raisin.py git setup <name1:user1> <name2:user2> ...")
+            else:
+                remote_specs = sys.argv[3:]
+                setup_git_remotes(remote_specs)
 
     else:
         print("❌ Error: No command-line arguments were provided.")
