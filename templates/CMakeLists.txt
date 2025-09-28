@@ -74,4 +74,6 @@ if (WIN32)
             DESTINATION "."
     )
     add_compile_options("/utf-8")
+    add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
+    add_compile_options(/wd4251 /wd4275)
 endif()
