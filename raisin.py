@@ -1941,37 +1941,60 @@ def _ensure_github_token():
     return tokens
 
 def _run_git_command(command, cwd):
-    """Helper to run a Git command and return its stripped output, handling errors."""
-    try:
-        # Set up environment with GitHub token for authentication
-        env = os.environ.copy()
+    """
+    Helper to run a Git command, return its stripped output, and handle errors.
 
+    CORRECTIONS:
+    1.  The `except` block now prints the actual error from Git (`e.stderr`),
+        making it possible to see why commands are failing.
+    2.  Added comments clarifying that token authentication only works for HTTPS.
+    """
+    try:
+        # --- HTTPS Token Authentication ---
+        # NOTE: This authentication method only works for remotes using
+        # HTTPS URLs (e.g., https://github.com/user/repo.git). It will be
+        # ignored if your remotes use SSH (git@github.com:...).
+        env = os.environ.copy()
+        # The _ensure_github_token function is assumed to exist from your code.
         tokens = _ensure_github_token()
 
         if tokens:
-            token = next(iter(tokens.values()))
-            env['GIT_CONFIG_COUNT'] = '1'
-            env['GIT_CONFIG_KEY_0'] = 'credential.https://github.com.helper'
-            env['GIT_CONFIG_VALUE_0'] = f'!f() {{ echo "username={token}"; echo "password="; }}; f'
+            # Using .get() is safer than assuming a token exists.
+            token = tokens.get('github.com') # Prefer a specific key if available
+            if not token:
+                token = next(iter(tokens.values()), None) # Fallback to first token
+
+            if token:
+                env['GIT_CONFIG_COUNT'] = '1'
+                env['GIT_CONFIG_KEY_0'] = 'credential.https://github.com.helper'
+                env['GIT_CONFIG_VALUE_0'] = f'!f() {{ echo "username={token}"; echo "password="; }}; f'
 
         # Using a timeout is safer for network operations like fetch
         result = subprocess.run(
             command,
             cwd=cwd,
-            check=True,
+            check=True,        # Raises CalledProcessError on non-zero exit codes
             capture_output=True,
             text=True,
             encoding='utf-8',
             env=env,
-            timeout=15  # 15-second timeout
+            timeout=30         # Increased timeout for slow connections
         )
         return result.stdout.strip()
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
-        # Log error or return None
+
+    # --- FIXED ERROR HANDLING ---
+    except subprocess.CalledProcessError as e:
+        # THIS IS THE KEY FIX: Print the actual error message from Git.
+        error_output = e.stderr.strip()
+        print(f"  ! Git command failed in '{os.path.basename(cwd)}'. Error: {error_output}")
+        return None
+    except subprocess.TimeoutExpired:
+        print(f"  ! Git command timed out in '{os.path.basename(cwd)}' after 30 seconds.")
         return None
     except FileNotFoundError:
-        # Git command not found or cwd is invalid
+        print(f"  ! Git command not found. Is Git installed and in your PATH?")
         return None
+
 
 def _get_remote_details(cwd):
     """
@@ -2090,13 +2113,14 @@ def process_repo(repo_path, pull_mode, origin="origin"):
             # Run the git pull command against the specified origin and branch.
             # Using --ff-only is safest: it won't create merge commits and will fail if the pull isn't a simple fast-forward.
             pull_result = _run_git_command(
-                ['git', 'pull', origin, current_branch, '--ff-only', '--quiet'],
+                ['git', 'pull', origin, current_branch, '--ff-only'],
                 repo_path
             )
 
-            # _run_git_command should return stdout. If it's quiet, a successful pull returns an empty string
-            # or a summary, while "Already up to date." is a specific message.
-            # NOTE: git pull writes "Already up to date." to STDOUT, not stderr.
+            if pull_result is None:
+                raise Exception("Git pull command failed with no output.")
+
+            # Now, this line is safe because pull_result is guaranteed to be a string.
             pull_result = pull_result.strip()
 
             if "Already up to date." in pull_result or pull_result == "":
@@ -2872,11 +2896,13 @@ def print_aligned_results(results: List[Tuple[str, str, str, str]]):
 
 def setup_git_remotes(remote_specs):
     """
-    Finds all git repositories in the 'src' directory, removes all existing remotes,
-    and adds new ones based on the provided specifications.
+    Finds git repos, removes all existing remotes, and adds new ones.
+
+    This version automatically discovers the correct GitHub repository name by
+    inspecting the 'origin' remote URL before making changes. If it cannot be
+    discovered, it falls back to using the local directory name.
     """
     try:
-        # Get the absolute path of the directory containing this script
         script_directory = os.path.dirname(os.path.abspath(__file__))
         src_directory = os.path.join(script_directory, 'src')
 
@@ -2886,19 +2912,34 @@ def setup_git_remotes(remote_specs):
 
         print(f"Scanning for git repositories in '{src_directory}'...")
 
-        # Iterate over all items in the 'src' directory
         for repo_name in os.listdir(src_directory):
             repo_path = os.path.join(src_directory, repo_name)
 
-            # Process only if it's a directory and a git repository
             if os.path.isdir(repo_path) and os.path.isdir(os.path.join(repo_path, '.git')):
                 print(f"\n--- Configuring repository: {repo_name} ---")
 
-                # 1. Get and delete existing remotes
+                # 1. DISCOVER: Get the actual repo name from the existing 'origin' remote URL.
+                github_repo_name = None
+                origin_url = run_command(['git', 'remote', 'get-url', 'origin'], cwd=repo_path)
+
+                if origin_url and origin_url.strip():
+                    # Regex to find 'user/repo' from SSH or HTTPS GitHub URLs
+                    match = re.search(r'github\.com[:/]([\w-]+/[\w.-]+?)(\.git)?$', origin_url.strip())
+                    if match:
+                        # Extract the 'repo' part from the full 'user/repo' path
+                        full_repo_path = match.group(1)
+                        github_repo_name = full_repo_path.split('/')[-1]
+                        print(f"  - Discovered GitHub repo name: '{github_repo_name}'")
+
+                if not github_repo_name:
+                    print(f"  ! Warning: Could not discover repo name from 'origin'. Falling back to directory name.")
+                    github_repo_name = repo_name # Fallback to original behavior
+
+                # 2. FIX: Robustly get and delete existing remotes
                 print("Checking for existing remotes...")
                 remotes_result = run_command(['git', 'remote'], cwd=repo_path)
 
-                if remotes_result:
+                if remotes_result and remotes_result.strip():
                     existing_remotes = remotes_result.strip().split('\n')
                     for remote in existing_remotes:
                         print(f"  - Removing existing remote: '{remote}'")
@@ -2906,16 +2947,15 @@ def setup_git_remotes(remote_specs):
                 else:
                     print("  - No existing remotes found.")
 
-                # 2. Add new remotes
+                # 3. Add new remotes using the discovered (or fallback) repo name
                 for spec in remote_specs:
                     try:
                         remote_name, user_or_org = spec.split(':', 1)
-                        # Construct the SSH URL for GitHub
-                        url = f"git@github.com:{user_or_org}/{repo_name}.git"
+                        url = f"git@github.com:{user_or_org}/{github_repo_name}.git"
                         print(f"  + Adding new remote: '{remote_name}' -> {url}")
                         run_command(['git', 'remote', 'add', remote_name, url], cwd=repo_path)
                     except ValueError:
-                        print(f"  ! Skipping malformed remote specification: '{spec}'. Expected format 'name:user'.")
+                        print(f"  ! Skipping malformed remote specification: '{spec}'.")
 
         print("\n✅ Git remote setup complete.")
 
