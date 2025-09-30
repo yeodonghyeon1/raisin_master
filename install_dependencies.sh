@@ -29,6 +29,12 @@ if [[ $EUID -ne 0 ]]; then
     SUDO="sudo"
 fi
 
+# Automatically handle pip flags for root
+PIP_FLAGS=""
+if [[ $EUID -eq 0 ]]; then
+    PIP_FLAGS="--break-system-packages"
+fi
+
 echo -e "${YELLOW}Checking and installing development tools...${NC}"
 echo "-------------------------------------------------"
 
@@ -112,7 +118,7 @@ if command -v pre-commit &> /dev/null || /usr/bin/python3 -m pre_commit --versio
 else
     echo "pre-commit not found. Attempting installation..."
     # Attempt 1: System-wide install (most reliable for git hooks)
-    if $SUDO /usr/bin/python3 -m pip install --break-system-packages pre-commit; then
+    if $SUDO /usr/bin/python3 -m pip install $PIP_FLAGS pre-commit; then
         echo -e "${GREEN}✅ pre-commit installed to system Python via pip.${NC}"
     # Attempt 2: Current user install via `python3 -m pip` (safer fallback)
     elif python3 -m pip install --user pre-commit; then
