@@ -1,63 +1,16 @@
-# Configuration file combining secrets and repositories
-# This file replaces secrets.yaml and repositories.yaml
+#===========================================================#
+# Basic configuration settings required for using raisin.py #
+#===========================================================#
 
-# Build target type: 'user' or 'devel'
-# - 'user': Standard builds/releases without suffix
-# - 'devel': Development builds/releases with pre-release suffix
+# This is the item for setting the user type.
+# - 'user': use a stable release version.
+# - 'devel': Uses the unstable latest pre-release currently under development.
 target_type: "user"
 
+# Setting up tokens required for using the raisin distribution version and raisin.py
 gh_tokens:
   "raionrobotics": "ghp_mytoken_code"
 
-repositories:
-  raisin:
-    type: github
-    url: "git@github.com:raionrobotics/raisin_release.git"
-
-  raisin_plugin:
-    type: github
-    url: "git@github.com:raionrobotics/raisin_plugin_release.git"
-
-  raibo_controller:
-    type: github
-    url: "git@github.com:raionrobotics/raibo_controller_release.git"
-
-  raisin_raibo2:
-    type: github
-    url: "git@github.com:raionrobotics/raisin_raibo2_release.git"
-
-  raisin_gui:
-    type: github
-    url: "git@github.com:raionrobotics/raisin_gui_release.git"
-
-  raisin_gui_map_window:
-    type: github
-    url: "git@github.com:raionrobotics/raisin_gui_map_window_release.git"
-
-  raisin_third_party_common:
-    type: github
-    url: "git@github.com:raionrobotics/raisin_third_party_common_release.git"
-
-  raisin_third_party_gui:
-    type: github
-    url: "git@github.com:raionrobotics/raisin_third_party_gui_release.git"
-
-  raisin_ros2_messages:
-    type: github
-    url: "git@github.com:raionrobotics/raisin_ros2_messages_release.git"
-
-  raisin_robot_packages:
-    type: github
-    url: "git@github.com:raionrobotics/raisin_robot_packages_release.git"
-
-  raisin_third_party_robot:
-    type: github
-    url: "git@github.com:raionrobotics/raisin_third_party_robot_release.git"
-
-# Packages to ignore during build/setup process
-# These packages will be excluded from:
-# - Project directory scanning (find_project_directories)
-# - Interface file processing within these packages
-# - Build target generation
+# Packages to ignore during build process(doesn't make add_subdirectory in cmakelist)
 raisin_ignore:
-  - sample_ignore_pkg  # Example package to ignore
+  - sample_ignore_pkg  # Example package to ignore 

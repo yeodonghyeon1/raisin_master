@@ -92,36 +92,49 @@ def is_root():
     return os.geteuid() == 0
 
 def load_configuration():
-    """Load configuration from configuration_setting.yaml file."""
+    """Load configuration"""
     script_dir_path = Path(__file__).parent
     config_path = script_dir_path / 'configuration_setting.yaml'
+
+    # Load repositories from repositories.yaml
+    all_repositories = {}
+    repo_path = script_dir_path / 'repositories.yaml'
+    if repo_path.is_file():
+        with open(repo_path, 'r') as f:
+            repo_data = yaml.safe_load(f)
+            if repo_data:
+                all_repositories = repo_data
+
+    tokens = {}
+    target_type = None
+    raisin_ignore = []
 
     if config_path.is_file():
         with open(config_path, 'r') as f:
             config = yaml.safe_load(f)
-            repositories = config.get('repositories', {})
             tokens = config.get('gh_tokens', {})
-            target_type = config.get('target_type', 'user')
+            target_type = config.get('target_type')
             raisin_ignore = config.get('raisin_ignore', [])
-            return repositories, tokens, target_type, raisin_ignore
     else:
-        # Fallback to old method for backward compatibility
-        all_repositories = {}
-        repo_files = sorted(list(set(glob.glob(str(script_dir_path / '*_repositories.yaml')) + glob.glob(str(script_dir_path / 'repositories.yaml')))))
-        for file_path in repo_files:
-            with open(file_path, 'r') as f:
-                repo_data = yaml.safe_load(f)
-                if repo_data:
-                    all_repositories.update(repo_data)
-
-        tokens = {}
         secrets_path = script_dir_path / 'secrets.yaml'
         if secrets_path.is_file():
             with open(secrets_path, 'r') as f:
                 secrets = yaml.safe_load(f)
                 tokens = secrets.get('gh_tokens', {})
+                target_type = secrets.get('target_type')
 
-        return all_repositories, tokens, 'user', []
+    # Validate target_type
+    if target_type is None:
+        print("❌ Error: 'target_type' is not specified in configuration_setting.yaml")
+        print("Please set 'target_type' to either 'user' or 'devel'")
+        sys.exit(1)
+
+    if target_type not in ['user', 'devel']:
+        print(f"❌ Error: Invalid 'target_type' value: '{target_type}'")
+        print("'target_type' must be either 'user' or 'devel'in configuration_setting.yaml")
+        sys.exit(1)
+
+    return all_repositories, tokens, target_type, raisin_ignore
 
 def delete_directory(directory):
     if os.path.exists(directory):
