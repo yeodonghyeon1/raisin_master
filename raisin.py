@@ -1495,7 +1495,7 @@ def release(target, build_type):
             print(f"\n--- Setting up build for '{target}' ---")
             build_dir = Path(script_directory) / "release" / "build" / target
             setup(package_name = target, build_type=build_type, build_dir = str(build_dir)) # Assuming setup is defined
-            os.makedirs(build_dir / "build", exist_ok=True)
+            os.makedirs(build_dir, exist_ok=True)
 
             print("⚙️  Running CMake...")
 
@@ -1503,7 +1503,7 @@ def release(target, build_type):
                 cmake_command = ["cmake",
                                  "-S", script_directory,
                                  "-G", "Ninja",
-                                 "-B", build_dir / "build",
+                                 "-B", build_dir,
                                  f"-DCMAKE_INSTALL_PREFIX={install_dir}",
                                  f"-DCMAKE_BUILD_TYPE={build_type}",
                                  "-DRAISIN_RELEASE_BUILD=ON"]
@@ -1514,12 +1514,12 @@ def release(target, build_type):
                 print(f"🔩 Using {core_count} cores for the build.")
                 build_command = ["ninja", "install", f"-j{core_count}"]
 
-                subprocess.run(build_command, cwd=build_dir / "build", check=True, text=True)
+                subprocess.run(build_command, cwd=build_dir, check=True, text=True)
             else:
                 cmake_command = ["cmake",
                                  "--preset", build_type.lower(),
                                  "-S", script_directory,
-                                 "-B", build_dir / "build",
+                                 "-B", build_dir,
                                  f"-DCMAKE_TOOLCHAIN_FILE={script_directory}/vcpkg/scripts/buildsystems/vcpkg.cmake",
                                  f"-DCMAKE_INSTALL_PREFIX={install_dir}",
                                  "-DRAISIN_RELEASE_BUILD=ON",
@@ -1529,12 +1529,12 @@ def release(target, build_type):
                 print("🛠️  Building with Ninja...")
 
                 subprocess.run(
-                    ["cmake", "--build", str(build_dir / "build"), "--parallel"],
+                    ["cmake", "--build", str(build_dir), "--parallel"],
                     check=True, text=True, env=developer_env
                 )
 
                 subprocess.run(
-                    ["cmake", "--install", str(build_dir / "build")],
+                    ["cmake", "--install", str(build_dir)],
                     check=True, text=True, env=developer_env
                 )
 
@@ -3127,7 +3127,7 @@ if __name__ == '__main__':
                 cmake_command = ["cmake",
                                  "-S", script_directory,
                                  "-G", "Ninja",
-                                 "-B", build_dir / "build",
+                                 "-B", build_dir,
                                  f"-DCMAKE_BUILD_TYPE={build_type}"]
                 subprocess.run(cmake_command, check=True, text=True)
                 print("✅ CMake configuration successful.")
@@ -3138,13 +3138,13 @@ if __name__ == '__main__':
                     build_command = ["ninja", "install", f"-j{core_count}"]
                 else:
                     build_command = ["ninja", f"-j{core_count}"]
-                subprocess.run(build_command, cwd=build_dir / "build", check=True, text=True)
+                subprocess.run(build_command, cwd=build_dir, check=True, text=True)
 
             else:
                 cmake_command = ["cmake",
                                  "--preset", build_type.lower(),
                                  "-S", script_directory,
-                                 "-B", build_dir / "build",
+                                 "-B", build_dir,
                                  f"-DCMAKE_TOOLCHAIN_FILE={script_directory}/vcpkg/scripts/buildsystems/vcpkg.cmake",
                                  "-DRAISIN_RELEASE_BUILD=ON"]
                 subprocess.run(cmake_command, check=True, text=True, env=developer_env)
@@ -3152,13 +3152,13 @@ if __name__ == '__main__':
                 print("🛠️  Building with Ninja...")
 
                 subprocess.run(
-                    ["cmake", "--build", str(build_dir / "build"), "--parallel"],
+                    ["cmake", "--build", str(build_dir), "--parallel"],
                     check=True, text=True, env=developer_env
                 )
 
                 if to_install:
                     subprocess.run(
-                        ["cmake", "--install", str(build_dir / "build")],
+                        ["cmake", "--install", str(build_dir)],
                         check=True, text=True, env=developer_env
                     )
 
