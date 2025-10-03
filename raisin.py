@@ -91,6 +91,51 @@ def is_root():
     """Check if the current user is root."""
     return os.geteuid() == 0
 
+def load_configuration():
+    """Load configuration"""
+    script_dir_path = Path(__file__).parent
+    config_path = script_dir_path / 'configuration_setting.yaml'
+
+    # Load repositories from repositories.yaml
+    all_repositories = {}
+    repo_path = script_dir_path / 'repositories.yaml'
+    if repo_path.is_file():
+        with open(repo_path, 'r') as f:
+            repo_data = yaml.safe_load(f)
+            if repo_data:
+                all_repositories = repo_data
+
+    tokens = {}
+    target_type = None
+    raisin_ignore = []
+
+    if config_path.is_file():
+        with open(config_path, 'r') as f:
+            config = yaml.safe_load(f)
+            tokens = config.get('gh_tokens', {})
+            target_type = config.get('target_type')
+            raisin_ignore = config.get('raisin_ignore', [])
+    else:
+        secrets_path = script_dir_path / 'secrets.yaml'
+        if secrets_path.is_file():
+            with open(secrets_path, 'r') as f:
+                secrets = yaml.safe_load(f)
+                tokens = secrets.get('gh_tokens', {})
+                target_type = secrets.get('target_type')
+
+    # Validate target_type
+    if target_type is None:
+        print("❌ Error: 'target_type' is not specified in configuration_setting.yaml")
+        print("Please set 'target_type' to either 'user' or 'devel'")
+        sys.exit(1)
+
+    if target_type not in ['user', 'devel']:
+        print(f"❌ Error: Invalid 'target_type' value: '{target_type}'")
+        print("'target_type' must be either 'user' or 'devel'in configuration_setting.yaml")
+        sys.exit(1)
+
+    return all_repositories, tokens, target_type, raisin_ignore
+
 def delete_directory(directory):
     if os.path.exists(directory):
         shutil.rmtree(directory)
@@ -914,24 +959,39 @@ def get_ubuntu_version():
 
 def get_packages_to_ignore():
     """
-    Reads a file named 'RAISIN_IGNORE' in the same directory as this script
-    and returns a list where each line in the file is an element.
+    Gets packages to ignore from multiple sources:
+    1. configuration_setting.yaml (raisin_ignore section)
+    2. RAISIN_IGNORE file (for backward compatibility)
+    Returns a combined list of packages to ignore.
     """
+    ignore_packages = []
+
+    # Get packages from configuration_setting.yaml
+    try:
+        _, _, _, config_ignore = load_configuration()
+        ignore_packages.extend(config_ignore)
+    except Exception:
+        pass  # If configuration loading fails, continue with file-based approach
+
+    # Get packages from RAISIN_IGNORE file (backward compatibility)
     try:
         # Get the absolute path of the current script
         script_dir = os.path.dirname(os.path.abspath(__file__))
         # Construct the full path to 'RAISIN_IGNORE'
         file_path = os.path.join(script_dir, 'RAISIN_IGNORE')
 
-        # Read the file and return its lines as a list
+        # Read the file and add its lines to the list
         with open(file_path, 'r') as file:
-            lines = [line.strip() for line in file.readlines()]
-        return lines
+            file_lines = [line.strip() for line in file.readlines()]
+            ignore_packages.extend(file_lines)
 
     except FileNotFoundError:
-        return []
+        pass  # File doesn't exist, that's okay
     except Exception as e:
-        raise Exception(f"An error occurred while reading the file: {e}")
+        raise Exception(f"An error occurred while reading RAISIN_IGNORE file: {e}")
+
+    # Remove duplicates while preserving order
+    return list(dict.fromkeys(ignore_packages))
 
 def find_git_repos(base_dir):
     """
@@ -1433,7 +1493,6 @@ def release(target, build_type):
         return
 
     release_file_path = os.path.join(target_dir, 'release.yaml')
-    repository_file_path = os.path.join(script_directory, 'repositories.yaml')
 
     if not os.path.isfile(release_file_path):
         print(f"❌ Error: 'release.yaml' not found in '{target_dir}'.")
@@ -1443,162 +1502,160 @@ def release(target, build_type):
 
     try:
         with open(release_file_path, 'r') as file:
-            with open(repository_file_path, 'r') as repository_file:
-                details = yaml.safe_load(file)
-                repositories = yaml.safe_load(repository_file)
+            details = yaml.safe_load(file)
+            repositories, secrets_config, target_type, _ = load_configuration()
 
-                print(f"\n--- Setting up build for '{target}' ---")
-                build_dir = Path(script_directory) / "release" / "build" / target
-                setup(package_name = target, build_type=build_type, build_dir = str(build_dir)) # Assuming setup is defined
-                os.makedirs(build_dir / "build", exist_ok=True)
+            print(f"\n--- Setting up build for '{target}' ---")
+            build_dir = Path(script_directory) / "release" / "build" / target
+            setup(package_name = target, build_type=build_type, build_dir = str(build_dir)) # Assuming setup is defined
+            os.makedirs(build_dir, exist_ok=True)
 
-                print("⚙️  Running CMake...")
+            print("⚙️  Running CMake...")
 
-                if platform.system().lower() == "linux":
-                    cmake_command = ["cmake",
-                                     "-S", script_directory,
-                                     "-G", "Ninja",
-                                     "-B", build_dir / "build",
-                                     f"-DCMAKE_INSTALL_PREFIX={install_dir}",
-                                     f"-DCMAKE_BUILD_TYPE={build_type}",
-                                     "-DRAISIN_RELEASE_BUILD=ON"]
-                    subprocess.run(cmake_command, check=True, text=True)
-                    print("✅ CMake configuration successful.")
-                    print("🛠️  Building with Ninja...")
-                    core_count = int(os.cpu_count() / 2) or 4
-                    print(f"🔩 Using {core_count} cores for the build.")
-                    build_command = ["ninja", "install", f"-j{core_count}"]
+            if platform.system().lower() == "linux":
+                cmake_command = ["cmake",
+                                 "-S", script_directory,
+                                 "-G", "Ninja",
+                                 "-B", build_dir,
+                                 f"-DCMAKE_INSTALL_PREFIX={install_dir}",
+                                 f"-DCMAKE_BUILD_TYPE={build_type}",
+                                 "-DRAISIN_RELEASE_BUILD=ON"]
+                subprocess.run(cmake_command, check=True, text=True)
+                print("✅ CMake configuration successful.")
+                print("🛠️  Building with Ninja...")
+                core_count = int(os.cpu_count() / 2) or 4
+                print(f"🔩 Using {core_count} cores for the build.")
+                build_command = ["ninja", "install", f"-j{core_count}"]
 
-                    subprocess.run(build_command, cwd=build_dir / "build", check=True, text=True)
-                else:
-                    cmake_command = ["cmake",
-                                     "--preset", build_type.lower(),
-                                     "-S", script_directory,
-                                     "-B", build_dir / "build",
-                                     f"-DCMAKE_TOOLCHAIN_FILE={script_directory}/vcpkg/scripts/buildsystems/vcpkg.cmake",
-                                     f"-DCMAKE_INSTALL_PREFIX={install_dir}",
-                                     "-DRAISIN_RELEASE_BUILD=ON",
-                                     *( [f"-DCMAKE_MAKE_PROGRAM={ninja_path}"] if ninja_path else [] ),]
-                    subprocess.run(cmake_command, check=True, text=True, env=developer_env)
-                    print("✅ CMake configuration successful.")
-                    print("🛠️  Building with Ninja...")
+                subprocess.run(build_command, cwd=build_dir, check=True, text=True)
+            else:
+                cmake_command = ["cmake",
+                                 "--preset", build_type.lower(),
+                                 "-S", script_directory,
+                                 "-B", build_dir,
+                                 f"-DCMAKE_TOOLCHAIN_FILE={script_directory}/vcpkg/scripts/buildsystems/vcpkg.cmake",
+                                 f"-DCMAKE_INSTALL_PREFIX={install_dir}",
+                                 "-DRAISIN_RELEASE_BUILD=ON",
+                                 *( [f"-DCMAKE_MAKE_PROGRAM={ninja_path}"] if ninja_path else [] ),]
+                subprocess.run(cmake_command, check=True, text=True, env=developer_env)
+                print("✅ CMake configuration successful.")
+                print("🛠️  Building with Ninja...")
 
-                    subprocess.run(
-                        ["cmake", "--build", str(build_dir / "build"), "--parallel"],
-                        check=True, text=True, env=developer_env
-                    )
-
-                    subprocess.run(
-                        ["cmake", "--install", str(build_dir / "build")],
-                        check=True, text=True, env=developer_env
-                    )
-
-                print(f"✅ Build for '{target}' complete!")
-
-                shutil.copy(Path(script_directory) / 'src' / target / 'release.yaml', Path(install_dir) / 'release.yaml')
-                if (Path(script_directory) / 'src' / target / 'install_dependencies.sh').is_file():
-                    shutil.copy(Path(script_directory) / 'src' / target / 'install_dependencies.sh', Path(install_dir) / 'install_dependencies.sh')
-
-                print("\n--- Creating Release Archive ---")
-                version = details.get('version', '0.0.0')
-                archive_name_base = f"{target}-{os_type}-{os_version}-{architecture}-{build_type}-v{version}"
-                release_dir = Path(script_directory) / 'release'
-                archive_file = release_dir / archive_name_base
-                print(f"📦 Compressing '{install_dir}'...")
-                shutil.make_archive(
-                    base_name=str(archive_file),
-                    format='zip',
-                    root_dir=str(install_dir)
+                subprocess.run(
+                    ["cmake", "--build", str(build_dir), "--parallel"],
+                    check=True, text=True, env=developer_env
                 )
-                print(f"✅ Successfully created archive: {archive_file}.zip")
 
-                secrets_path = os.path.join(script_directory, 'secrets.yaml')
-                if not os.path.isfile(secrets_path):
-                    print("❌ Error: 'secrets.yaml' not found. Cannot upload to GitHub.")
+                subprocess.run(
+                    ["cmake", "--install", str(build_dir)],
+                    check=True, text=True, env=developer_env
+                )
+
+            print(f"✅ Build for '{target}' complete!")
+
+            shutil.copy(Path(script_directory) / 'src' / target / 'release.yaml', Path(install_dir) / 'release.yaml')
+            if (Path(script_directory) / 'src' / target / 'install_dependencies.sh').is_file():
+                shutil.copy(Path(script_directory) / 'src' / target / 'install_dependencies.sh', Path(install_dir) / 'install_dependencies.sh')
+
+            print("\n--- Creating Release Archive ---")
+            version = details.get('version', '0.0.0')
+            suffix = "pre-release" if target_type == "devel" else "release"
+            archive_name_base = f"{target}-{os_type}-{os_version}-{architecture}-{suffix}-v{version}"
+            release_dir = Path(script_directory) / 'release'
+            archive_file = release_dir / archive_name_base
+            print(f"📦 Compressing '{install_dir}'...")
+            shutil.make_archive(
+                base_name=str(archive_file),
+                format='zip',
+                root_dir=str(install_dir)
+            )
+            print(f"✅ Successfully created archive: {archive_file}.zip")
+
+            repositories, secrets, _, _ = load_configuration()
+            if not secrets:
+                print("❌ Error: GitHub tokens not found in configuration. Cannot upload to GitHub.")
+                return
+
+            print("\n--- Uploading to GitHub Release ---")
+
+            release_info = repositories.get(target)
+            if not (release_info and release_info.get('url')):
+                print(f"ℹ️ Repository URL for '{target}' not found in configuration_setting.yaml. Skipping GitHub release.")
+                return
+
+            repo_url = release_info['url']
+            match = re.search(r'git@github\.com:(.*)\.git', repo_url)
+            repo_slug = match.group(1) if match else None
+            if not repo_slug:
+                print(f"❌ Error: Could not parse repository from URL: {repo_url}")
+                return
+
+            owner = repo_slug.split('/')[0]
+            token = secrets.get(owner)
+            if not token:
+                print(f"❌ Error: Token for owner '{owner}' not found in configuration_setting.yaml.")
+                return
+
+            auth_env = os.environ.copy()
+            auth_env["GH_TOKEN"] = token
+            tag_name = f"v{version}"
+
+            archive_filename = os.path.basename(archive_file) + ".zip"
+            archive_file_str = str(archive_file) + ".zip"
+
+            # 1. Check if the release and asset already exist
+            release_exists = True
+            asset_exists = False
+            try:
+                print(f"Checking status of release '{tag_name}' in '{repo_slug}'...")
+                list_cmd = ["gh", "release", "view", tag_name, "--repo", repo_slug, "--json", "assets"]
+                result = subprocess.run(list_cmd, check=True, capture_output=True, text=True, env=auth_env)
+                release_data = json.loads(result.stdout)
+                existing_assets = [asset['name'] for asset in release_data.get('assets', [])]
+                if archive_filename in existing_assets:
+                    asset_exists = True
+
+            except subprocess.CalledProcessError as e:
+                if "release not found" in e.stderr:
+                    release_exists = False
+                else:
+                    print(f"❌ Error checking release status: {e.stderr}")
                     return
-                with open(secrets_path, 'r') as secrets_file:
-                    secrets = yaml.safe_load(secrets_file)
 
-                print("\n--- Uploading to GitHub Release ---")
+            # 2. Decide whether to create, upload, or prompt for overwrite
+            if not release_exists:
+                print(f"✅ Release '{tag_name}' does not exist. Creating a new one...")
+                gh_create_cmd = [
+                    "gh", "release", "create", tag_name, archive_file_str,
+                    "--repo", repo_slug, "--title", f"Release {tag_name}",
+                    "--notes", f"Automated release of version {version}."
+                ]
+                subprocess.run(gh_create_cmd, check=True, capture_output=True, text=True, env=auth_env)
+                print(f"✅ Successfully created new release and uploaded '{archive_filename}'.")
+            elif asset_exists:
+                if not always_yes:
+                    prompt = input(f"⚠️ Asset '{archive_filename}' already exists. Overwrite? (y/n): ").lower()
+                else:
+                    prompt = 'y'
 
-                release_info = repositories.get(target)
-                if not (release_info and release_info.get('url')):
-                    print(f"ℹ️ Repository URL for '{target}' not found in 'repositories.yaml'. Skipping GitHub release.")
-                    return
-
-                repo_url = release_info['url']
-                match = re.search(r'git@github\.com:(.*)\.git', repo_url)
-                repo_slug = match.group(1) if match else None
-                if not repo_slug:
-                    print(f"❌ Error: Could not parse repository from URL: {repo_url}")
-                    return
-
-                owner = repo_slug.split('/')[0]
-                token = secrets.get("gh_tokens", {}).get(owner)
-                if not token:
-                    print(f"❌ Error: Token for owner '{owner}' not found in secrets.yaml.")
-                    return
-
-                auth_env = os.environ.copy()
-                auth_env["GH_TOKEN"] = token
-                tag_name = f"v{version}"
-
-                archive_filename = os.path.basename(archive_file) + ".zip"
-                archive_file_str = str(archive_file) + ".zip"
-
-                # 1. Check if the release and asset already exist
-                release_exists = True
-                asset_exists = False
-                try:
-                    print(f"Checking status of release '{tag_name}' in '{repo_slug}'...")
-                    list_cmd = ["gh", "release", "view", tag_name, "--repo", repo_slug, "--json", "assets"]
-                    result = subprocess.run(list_cmd, check=True, capture_output=True, text=True, env=auth_env)
-                    release_data = json.loads(result.stdout)
-                    existing_assets = [asset['name'] for asset in release_data.get('assets', [])]
-                    if archive_filename in existing_assets:
-                        asset_exists = True
-
-                except subprocess.CalledProcessError as e:
-                    if "release not found" in e.stderr:
-                        release_exists = False
-                    else:
-                        print(f"❌ Error checking release status: {e.stderr}")
-                        return
-
-                # 2. Decide whether to create, upload, or prompt for overwrite
-                if not release_exists:
-                    print(f"✅ Release '{tag_name}' does not exist. Creating a new one...")
-                    gh_create_cmd = [
-                        "gh", "release", "create", tag_name, archive_file_str,
-                        "--repo", repo_slug, "--title", f"Release {tag_name}",
-                        "--notes", f"Automated release of version {version}."
-                    ]
-                    subprocess.run(gh_create_cmd, check=True, capture_output=True, text=True, env=auth_env)
-                    print(f"✅ Successfully created new release and uploaded '{archive_filename}'.")
-                elif asset_exists:
-                    if not always_yes:
-                        prompt = input(f"⚠️ Asset '{archive_filename}' already exists. Overwrite? (y/n): ").lower()
-                    else:
-                        prompt = 'y'
-
-                    if always_yes or prompt in ['y', 'yes']:
-                        print(f"🚀 Overwriting asset...")
-                        gh_upload_cmd = [
-                            "gh", "release", "upload", tag_name, archive_file_str,
-                            "--repo", repo_slug, "--clobber"
-                        ]
-                        subprocess.run(gh_upload_cmd, check=True, capture_output=True, text=True, env=auth_env)
-                        print(f"✅ Successfully overwrote asset in release '{tag_name}'.")
-                    else:
-                        print(f"🚫 Upload for '{archive_filename}' cancelled by user.")
-                else: # Release exists, but asset does not
-                    print(f"🚀 Uploading new asset to existing release '{tag_name}'...")
+                if always_yes or prompt in ['y', 'yes']:
+                    print(f"🚀 Overwriting asset...")
                     gh_upload_cmd = [
                         "gh", "release", "upload", tag_name, archive_file_str,
-                        "--repo", repo_slug
+                        "--repo", repo_slug, "--clobber"
                     ]
                     subprocess.run(gh_upload_cmd, check=True, capture_output=True, text=True, env=auth_env)
-                    print(f"✅ Successfully uploaded asset to release '{tag_name}'.")
+                    print(f"✅ Successfully overwrote asset in release '{tag_name}'.")
+                else:
+                    print(f"🚫 Upload for '{archive_filename}' cancelled by user.")
+            else: # Release exists, but asset does not
+                print(f"🚀 Uploading new asset to existing release '{tag_name}'...")
+                gh_upload_cmd = [
+                    "gh", "release", "upload", tag_name, archive_file_str,
+                    "--repo", repo_slug
+                ]
+                subprocess.run(gh_upload_cmd, check=True, capture_output=True, text=True, env=auth_env)
+                print(f"✅ Successfully uploaded asset to release '{tag_name}'.")
 
     # Keep your existing exception handling
     except FileNotFoundError as e:
@@ -1626,21 +1683,13 @@ def install(targets, build_type):
     print("🚀 Starting recursive installation process...")
     script_dir_path = Path(script_directory)
 
-    # ## 1. Load Configurations (Omitted for brevity)
-    all_repositories = {}
-    repo_files = sorted(list(set(glob.glob(str(script_dir_path / '*_repositories.yaml')) + glob.glob(str(script_dir_path / 'repositories.yaml')))))
-    for file_path in repo_files:
-        with open(file_path, 'r') as f:
-            repo_data = yaml.safe_load(f)
-            if repo_data:
-                all_repositories.update(repo_data)
-    secrets_path = script_dir_path / 'secrets.yaml'
-    try:
-        with open(secrets_path, 'r') as f:
-            secrets = yaml.safe_load(f)
-            tokens = secrets.get('gh_tokens', {})
-    except FileNotFoundError:
-        print(f"❌ Error: Secrets file not found at {secrets_path}")
+    # ## 1. Load Configurations
+    all_repositories, tokens, target_type, _ = load_configuration()
+    if not all_repositories:
+        print("❌ Error: No repositories found in configuration_setting.yaml")
+        return
+    if not tokens:
+        print("❌ Error: No GitHub tokens found in configuration_setting.yaml")
         return
 
     # ## 3. Process Installation Queue
@@ -1783,7 +1832,8 @@ def install(targets, build_type):
                 continue
             processed_packages.add((package_name, version))
 
-            asset_name = f"{package_name}-{os_type}-{os_version}-{architecture}-{build_type}-{version}.zip"
+            suffix = "pre-release" if target_type == "devel" else "release"
+            asset_name = f"{package_name}-{os_type}-{os_version}-{architecture}-{suffix}-{version}.zip"
             asset_api_url = next((asset['url'] for asset in release_data.get('assets', []) if asset['name'] == asset_name), None)
 
             if not asset_api_url:
@@ -1929,15 +1979,8 @@ def get_repo_sort_key(repo_dict):
     return (primary_owner.lower(), repo_name.lower())
 
 def _ensure_github_token():
-    """Load GitHub tokens from secrets.yaml."""
-    script_dir_path = Path(__file__).parent
-    tokens = {}
-    secrets_path = script_dir_path / 'secrets.yaml'
-    if secrets_path.is_file():
-        with open(secrets_path, 'r') as f:
-            secrets = yaml.safe_load(f)
-            tokens = secrets.get('gh_tokens', {})
-            
+    """Load GitHub tokens from configuration_setting.yaml."""
+    _, tokens, _, _ = load_configuration()
     return tokens
 
 def _run_git_command(command, cwd):
@@ -2360,24 +2403,15 @@ def list_all_available_packages():
         return
 
     # Load all repository configurations
-    repo_files = sorted(list(set(glob.glob(str(script_dir_path / '*_repositories.yaml')) + glob.glob(str(script_dir_path / 'repositories.yaml')))))
-    for file_path in repo_files:
-        with open(file_path, 'r') as f:
-            repo_data = yaml.safe_load(f)
-            if repo_data:
-                all_repositories.update(repo_data)
+    all_repositories, tokens, target_type, _ = load_configuration()
 
     if not all_repositories:
-        print("🤷 No packages found in any repositories.yaml files.")
+        print("🤷 No packages found in configuration_setting.yaml.")
         return
 
-    # Load GitHub tokens for API requests
-    tokens = {}
-    secrets_path = script_dir_path / 'secrets.yaml'
-    if secrets_path.is_file():
-        with open(secrets_path, 'r') as f:
-            secrets = yaml.safe_load(f)
-            tokens = secrets.get('gh_tokens', {})
+    if not tokens:
+        print("❌ Error: No GitHub tokens found in configuration_setting.yaml")
+        return
 
     session = requests.Session()
 
@@ -2415,7 +2449,8 @@ def list_all_available_packages():
                 try:
                     version_obj = parse_version(tag)
                     # Construct the expected asset filenames
-                    expected_asset_release = f"{package_name}-{os_type}-{os_version}-{architecture}-release-{tag}.zip"
+                    suffix = "pre-release" if target_type == "devel" else "release"
+                    expected_asset_release = f"{package_name}-{os_type}-{os_version}-{architecture}-{suffix}-{tag}.zip"
                     expected_asset_debug = f"{package_name}-{os_type}-{os_version}-{architecture}-debug-{tag}.zip"
 
                     # Check for a matching asset
@@ -2467,25 +2502,19 @@ def list_github_release_versions(package_name: str):
         return
 
     # --- 2. Load Repository and Secrets Configuration ---
-    all_repositories = {}
-    repo_files = sorted(list(set(glob.glob(str(script_dir_path / '*_repositories.yaml')) + glob.glob(str(script_dir_path / 'repositories.yaml')))))
-    for file_path in repo_files:
-        with open(file_path, 'r') as f:
-            repo_data = yaml.safe_load(f)
-            if repo_data:
-                all_repositories.update(repo_data)
+    all_repositories, tokens, target_type, _ = load_configuration()
 
-    tokens = {}
-    secrets_path = script_dir_path / 'secrets.yaml'
-    if secrets_path.is_file():
-        with open(secrets_path, 'r') as f:
-            secrets = yaml.safe_load(f)
-            tokens = secrets.get('gh_tokens', {})
+    if not all_repositories:
+        print("❌ Error: No repositories found in configuration_setting.yaml")
+        return
+    if not tokens:
+        print("❌ Error: No GitHub tokens found in configuration_setting.yaml")
+        return
 
     # --- 3. Find the repository URL for the package ---
     repo_info = all_repositories.get(package_name)
     if not repo_info or 'url' not in repo_info:
-        print(f"❌ Error: No repository URL found for '{package_name}' in any repositories.yaml file.")
+        print(f"❌ Error: No repository URL found for '{package_name}' in configuration_setting.yaml.")
         return
 
     # --- 4. Parse Owner/Repo from URL ---
@@ -2523,8 +2552,9 @@ def list_github_release_versions(package_name: str):
             try:
                 version_obj = parse_version(tag)
                 # Construct the expected asset filenames for release and debug builds
-                expected_asset_release = f"{package_name}-{os_type}-{os_version}-{architecture}-release-{tag}.zip"
-                expected_asset_debug = f"{package_name}-{os_type}-{os_version}-{architecture}-debug-{tag}.zip"
+                suffix = "pre-release" if target_type == "devel" else "release"
+                expected_asset_release = f"{package_name}-{os_type}-{os_version}-{architecture}-release{suffix}-{tag}.zip"
+                expected_asset_debug = f"{package_name}-{os_type}-{os_version}-{architecture}-debug{suffix}-{tag}.zip"
 
                 # Check if any asset in this release matches our expected filename
                 for asset in release.get('assets', []):
@@ -3150,7 +3180,7 @@ if __name__ == '__main__':
                 cmake_command = ["cmake",
                                  "-S", script_directory,
                                  "-G", "Ninja",
-                                 "-B", build_dir / "build",
+                                 "-B", build_dir,
                                  f"-DCMAKE_BUILD_TYPE={build_type}"]
                 subprocess.run(cmake_command, check=True, text=True)
                 print("✅ CMake configuration successful.")
@@ -3161,13 +3191,13 @@ if __name__ == '__main__':
                     build_command = ["ninja", "install", f"-j{core_count}"]
                 else:
                     build_command = ["ninja", f"-j{core_count}"]
-                subprocess.run(build_command, cwd=build_dir / "build", check=True, text=True)
+                subprocess.run(build_command, cwd=build_dir, check=True, text=True)
 
             else:
                 cmake_command = ["cmake",
                                  "--preset", build_type.lower(),
                                  "-S", script_directory,
-                                 "-B", build_dir / "build",
+                                 "-B", build_dir,
                                  f"-DCMAKE_TOOLCHAIN_FILE={script_directory}/vcpkg/scripts/buildsystems/vcpkg.cmake",
                                  "-DRAISIN_RELEASE_BUILD=ON"]
                 subprocess.run(cmake_command, check=True, text=True, env=developer_env)
@@ -3175,13 +3205,13 @@ if __name__ == '__main__':
                 print("🛠️  Building with Ninja...")
 
                 subprocess.run(
-                    ["cmake", "--build", str(build_dir / "build"), "--parallel"],
+                    ["cmake", "--build", str(build_dir), "--parallel"],
                     check=True, text=True, env=developer_env
                 )
 
                 if to_install:
                     subprocess.run(
-                        ["cmake", "--install", str(build_dir / "build")],
+                        ["cmake", "--install", str(build_dir)],
                         check=True, text=True, env=developer_env
                     )
 

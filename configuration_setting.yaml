@@ -1,0 +1,16 @@
+#===========================================================#
+# Basic configuration settings required for using raisin.py #
+#===========================================================#
+
+# This is the item for setting the user type.
+# - 'user': use a stable release version.
+# - 'devel': Uses the unstable latest pre-release currently under development.
+target_type: "user"
+
+# Setting up tokens required for using the raisin distribution version and raisin.py
+gh_tokens:
+  "raionrobotics": "ghp_mytoken_code"
+
+# Packages to ignore during build process(doesn't make add_subdirectory in cmakelist)
+raisin_ignore:
+  - sample_ignore_pkg  # Example package to ignore 

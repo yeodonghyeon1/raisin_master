@@ -65,6 +65,7 @@ build-for-release/*
 release/*
 secrets.yaml
 *_repositories.yaml
+configuration_setting.yaml
 
 .cache
 
