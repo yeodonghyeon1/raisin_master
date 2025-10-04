@@ -106,35 +106,35 @@ def load_configuration():
                 all_repositories = repo_data
 
     tokens = {}
-    target_type = None
-    raisin_ignore = []
+    user_type = None
+    packages_to_ignore = []
 
     if config_path.is_file():
         with open(config_path, 'r') as f:
             config = yaml.safe_load(f)
             tokens = config.get('gh_tokens', {})
-            target_type = config.get('target_type')
-            raisin_ignore = config.get('raisin_ignore', [])
+            user_type = config.get('user_type')
+            packages_to_ignore = config.get('packages_to_ignore', [])
     else:
         secrets_path = script_dir_path / 'secrets.yaml'
         if secrets_path.is_file():
             with open(secrets_path, 'r') as f:
                 secrets = yaml.safe_load(f)
                 tokens = secrets.get('gh_tokens', {})
-                target_type = secrets.get('target_type')
+                user_type = secrets.get('user_type')
 
-    # Validate target_type
-    if target_type is None:
-        print("❌ Error: 'target_type' is not specified in configuration_setting.yaml")
-        print("Please set 'target_type' to either 'user' or 'devel'")
+    # Validate user_type
+    if user_type is None:
+        print("❌ Error: 'user_type' is not specified in configuration_setting.yaml")
+        print("Please set 'user_type' to either 'user' or 'devel'")
         sys.exit(1)
 
-    if target_type not in ['user', 'devel']:
-        print(f"❌ Error: Invalid 'target_type' value: '{target_type}'")
-        print("'target_type' must be either 'user' or 'devel'in configuration_setting.yaml")
+    if user_type not in ['user', 'devel']:
+        print(f"❌ Error: Invalid 'user_type' value: '{user_type}'")
+        print("'user_type' must be either 'user' or 'devel'in configuration_setting.yaml")
         sys.exit(1)
 
-    return all_repositories, tokens, target_type, raisin_ignore
+    return all_repositories, tokens, user_type, packages_to_ignore
 
 def delete_directory(directory):
     if os.path.exists(directory):
@@ -961,7 +961,7 @@ def get_packages_to_ignore():
     """
     Gets packages to ignore from multiple sources:
     1. configuration_setting.yaml (raisin_ignore section)
-    2. RAISIN_IGNORE file (for backward compatibility)
+    2. packages_to_ignore file (for backward compatibility)
     Returns a combined list of packages to ignore.
     """
     ignore_packages = []
@@ -1503,7 +1503,7 @@ def release(target, build_type):
     try:
         with open(release_file_path, 'r') as file:
             details = yaml.safe_load(file)
-            repositories, secrets_config, target_type, _ = load_configuration()
+            repositories, secrets_config, user_type, _ = load_configuration()
 
             print(f"\n--- Setting up build for '{target}' ---")
             build_dir = Path(script_directory) / "release" / "build" / target
@@ -1559,7 +1559,7 @@ def release(target, build_type):
 
             print("\n--- Creating Release Archive ---")
             version = details.get('version', '0.0.0')
-            suffix = "pre-release" if target_type == "devel" else "release"
+            suffix = "pre-release" if user_type == "devel" else "release"
             archive_name_base = f"{target}-{os_type}-{os_version}-{architecture}-{suffix}-v{version}"
             release_dir = Path(script_directory) / 'release'
             archive_file = release_dir / archive_name_base
@@ -1684,7 +1684,7 @@ def install(targets, build_type):
     script_dir_path = Path(script_directory)
 
     # ## 1. Load Configurations
-    all_repositories, tokens, target_type, _ = load_configuration()
+    all_repositories, tokens, user_type, _ = load_configuration()
     if not all_repositories:
         print("❌ Error: No repositories found in configuration_setting.yaml")
         return
@@ -1832,7 +1832,7 @@ def install(targets, build_type):
                 continue
             processed_packages.add((package_name, version))
 
-            suffix = "pre-release" if target_type == "devel" else "release"
+            suffix = "pre-release" if user_type == "devel" else "release"
             asset_name = f"{package_name}-{os_type}-{os_version}-{architecture}-{suffix}-{version}.zip"
             asset_api_url = next((asset['url'] for asset in release_data.get('assets', []) if asset['name'] == asset_name), None)
 
@@ -2403,7 +2403,7 @@ def list_all_available_packages():
         return
 
     # Load all repository configurations
-    all_repositories, tokens, target_type, _ = load_configuration()
+    all_repositories, tokens, user_type, _ = load_configuration()
 
     if not all_repositories:
         print("🤷 No packages found in configuration_setting.yaml.")
@@ -2449,7 +2449,7 @@ def list_all_available_packages():
                 try:
                     version_obj = parse_version(tag)
                     # Construct the expected asset filenames
-                    suffix = "pre-release" if target_type == "devel" else "release"
+                    suffix = "pre-release" if user_type == "devel" else "release"
                     expected_asset_release = f"{package_name}-{os_type}-{os_version}-{architecture}-{suffix}-{tag}.zip"
                     expected_asset_debug = f"{package_name}-{os_type}-{os_version}-{architecture}-debug-{tag}.zip"
 
@@ -2502,7 +2502,7 @@ def list_github_release_versions(package_name: str):
         return
 
     # --- 2. Load Repository and Secrets Configuration ---
-    all_repositories, tokens, target_type, _ = load_configuration()
+    all_repositories, tokens, user_type, _ = load_configuration()
 
     if not all_repositories:
         print("❌ Error: No repositories found in configuration_setting.yaml")
@@ -2552,7 +2552,7 @@ def list_github_release_versions(package_name: str):
             try:
                 version_obj = parse_version(tag)
                 # Construct the expected asset filenames for release and debug builds
-                suffix = "pre-release" if target_type == "devel" else "release"
+                suffix = "pre-release" if user_type == "devel" else "release"
                 expected_asset_release = f"{package_name}-{os_type}-{os_version}-{architecture}-release{suffix}-{tag}.zip"
                 expected_asset_debug = f"{package_name}-{os_type}-{os_version}-{architecture}-debug{suffix}-{tag}.zip"
 
