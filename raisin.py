@@ -3177,12 +3177,24 @@ if __name__ == '__main__':
                              f"-DCMAKE_BUILD_TYPE={build_type.upper()}",
                              ".."]
             if platform.system().lower() == "linux":
-                cmake_command = ["cmake",
-                                 "-S", script_directory,
-                                 "-G", "Ninja",
-                                 "-B", build_dir,
-                                 f"-DCMAKE_BUILD_TYPE={build_type}"]
-                subprocess.run(cmake_command, check=True, text=True)
+                try:
+                    cmake_command = ["cmake",
+                                     "-S", script_directory,
+                                     "-G", "Ninja",
+                                     "-B", build_dir,
+                                     f"-DCMAKE_BUILD_TYPE={build_type}"]
+                    subprocess.run(cmake_command, check=True, text=True)
+                except subprocess.CalledProcessError as e:
+                    # If the command fails, print its output to help with debugging
+                    print("--- CMake Command Failed ---", file=sys.stderr)
+                    print(f"Return Code: {e.returncode}", file=sys.stderr)
+                    print("\n--- STDOUT ---", file=sys.stderr)
+                    print(e.stdout, file=sys.stderr)
+                    print("\n--- STDERR ---", file=sys.stderr)
+                    print(e.stderr, file=sys.stderr)
+                    print("--------------------------", file=sys.stderr)
+                    sys.exit(1) # Exit with a failure code
+
                 print("✅ CMake configuration successful.")
                 print("🛠️  Building with Ninja...")
                 core_count = int(os.cpu_count() / 2) or 4
@@ -3194,13 +3206,26 @@ if __name__ == '__main__':
                 subprocess.run(build_command, cwd=build_dir, check=True, text=True)
 
             else:
-                cmake_command = ["cmake",
-                                 "--preset", build_type.lower(),
-                                 "-S", script_directory,
-                                 "-B", build_dir,
-                                 f"-DCMAKE_TOOLCHAIN_FILE={script_directory}/vcpkg/scripts/buildsystems/vcpkg.cmake",
-                                 "-DRAISIN_RELEASE_BUILD=ON"]
-                subprocess.run(cmake_command, check=True, text=True, env=developer_env)
+                try:
+                    cmake_command = ["cmake",
+                                     "--preset", build_type.lower(),
+                                     "-S", script_directory,
+                                     "-B", build_dir,
+                                     f"-DCMAKE_TOOLCHAIN_FILE={script_directory}/vcpkg/scripts/buildsystems/vcpkg.cmake",
+                                     "-DRAISIN_RELEASE_BUILD=ON"]
+                    subprocess.run(cmake_command, check=True, text=True, env=developer_env)
+
+                except subprocess.CalledProcessError as e:
+                    # If the command fails, print its output to help with debugging
+                    print("--- CMake Command Failed ---", file=sys.stderr)
+                    print(f"Return Code: {e.returncode}", file=sys.stderr)
+                    print("\n--- STDOUT ---", file=sys.stderr)
+                    print(e.stdout, file=sys.stderr)
+                    print("\n--- STDERR ---", file=sys.stderr)
+                    print(e.stderr, file=sys.stderr)
+                    print("--------------------------", file=sys.stderr)
+                    sys.exit(1) # Exit with a failure code
+
                 print("✅ CMake configuration successful.")
                 print("🛠️  Building with Ninja...")
 
