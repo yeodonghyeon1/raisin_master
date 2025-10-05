@@ -52,14 +52,7 @@ if((CMAKE_CXX_COMPILER_ID MATCHES "Clang" OR CMAKE_CXX_COMPILER_ID MATCHES "GNU"
     endif()
 endif()
 
-# Define the output file path in the source directory
-set(OUTPUT_FILE "${CMAKE_SOURCE_DIR}/RAISIN_BUILD_DIRECTORY")
-
-# Write the build directory path to the file
-file(WRITE "${OUTPUT_FILE}" "${CMAKE_BINARY_DIR}\n")
-
-# Display a message in the console
-message(STATUS "Build directory saved to ${OUTPUT_FILE}")
+update_build_dir_in_yaml(${CMAKE_CURRENT_SOURCE_DIR}/configuration_setting.yaml)
 
 install(DIRECTORY generated/include/
         DESTINATION include  # where to install the headers

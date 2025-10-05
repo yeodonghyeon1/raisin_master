@@ -60,7 +60,6 @@ dependency_graph.png.png
 /CMakeLists_Release.txt
 RAISIN_IGNORE
 imgui.ini
-/RAISIN_BUILD_DIRECTORY
 build-for-release/*
 release/*
 secrets.yaml

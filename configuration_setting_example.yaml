@@ -13,4 +13,8 @@ gh_tokens:
 
 # Packages to ignore during build process(doesn't make add_subdirectory in cmakelist)
 packages_to_ignore:
-  - sample_ignore_pkg  # Example package to ignore 
+  - sample_ignore_pkg  # Example package to ignore
+
+# build directories, which will be updated by CMakeLists.txt
+release_build_dir: "None"
+debug_build_dir: "None"
