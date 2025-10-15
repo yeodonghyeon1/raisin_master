@@ -157,3 +157,62 @@ macro(raisin_windows_only)
         return()
     endif()
 endmacro()
+
+#=============================================================================
+# FUNCTION: update_build_dir_in_yaml
+#
+# Description:
+#   Executes an external Python script to safely update a YAML file with the
+#   build directory path. This approach is robust and preserves YAML structure.
+#
+# Arguments:
+#   CONFIG_FILE_PATH - The absolute path to the YAML configuration file.
+#
+#=============================================================================
+function(update_build_dir_in_yaml CONFIG_FILE_PATH)
+    # Find a Python interpreter on the system
+    find_package(PythonInterp REQUIRED)
+
+    # Path to our helper script
+    set(YAML_UPDATE_SCRIPT "${CMAKE_SOURCE_DIR}/cmake/update_build_directories.py")
+
+    if(NOT EXISTS ${YAML_UPDATE_SCRIPT})
+        message(FATAL_ERROR "YAML update script not found at ${YAML_UPDATE_SCRIPT}")
+        return()
+    endif()
+
+    # Determine the key based on the build type
+    set(yaml_key "")
+    if(CMAKE_BUILD_TYPE MATCHES "^Debug$")
+        set(yaml_key "debug_build_dir")
+    elseif(CMAKE_BUILD_TYPE MATCHES "^Release$")
+        set(yaml_key "release_build_dir")
+    else()
+        message(STATUS "Build type is '${CMAKE_BUILD_TYPE}'. No configuration setting will be updated.")
+        return()
+    endif()
+
+    # Get the native path for the current build directory
+    file(TO_NATIVE_PATH "${CMAKE_BINARY_DIR}" yaml_value)
+
+    # Execute the Python script to perform the update
+    message(STATUS "Running YAML update script for ${CONFIG_FILE_PATH}...")
+    execute_process(
+            COMMAND ${PYTHON_EXECUTABLE} ${YAML_UPDATE_SCRIPT} "${CONFIG_FILE_PATH}" "${yaml_key}" "${yaml_value}"
+            RESULT_VARIABLE process_result
+            OUTPUT_VARIABLE process_output
+            ERROR_VARIABLE process_error
+    )
+
+    # Check if the script executed successfully
+    if(NOT process_result EQUAL 0)
+        message(FATAL_ERROR "Python script failed to update YAML file.\n"
+                "Result: ${process_result}\n"
+                "Output: ${process_output}\n"
+                "Error: ${process_error}")
+    else()
+        # Print the script's success message
+        message(STATUS "${process_output}")
+    endif()
+
+endfunction()
