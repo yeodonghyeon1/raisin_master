@@ -1559,8 +1559,7 @@ def release(target, build_type):
 
             print("\n--- Creating Release Archive ---")
             version = details.get('version', '0.0.0')
-            suffix = "pre-release" if user_type == "devel" else "release"
-            archive_name_base = f"{target}-{os_type}-{os_version}-{architecture}-{suffix}-v{version}"
+            archive_name_base = f"{target}-{os_type}-{os_version}-{architecture}-{build_type}-v{version}"
             release_dir = Path(script_directory) / 'release'
             archive_file = release_dir / archive_name_base
             print(f"📦 Compressing '{install_dir}'...")
@@ -1628,7 +1627,8 @@ def release(target, build_type):
                 gh_create_cmd = [
                     "gh", "release", "create", tag_name, archive_file_str,
                     "--repo", repo_slug, "--title", f"Release {tag_name}",
-                    "--notes", f"Automated release of version {version}."
+                    "--notes", f"Automated release of version {version}.",
+                    "--prerelease"
                 ]
                 subprocess.run(gh_create_cmd, check=True, capture_output=True, text=True, env=auth_env)
                 print(f"✅ Successfully created new release and uploaded '{archive_filename}'.")
@@ -1810,7 +1810,7 @@ def install(targets, build_type):
 
             for release in releases_list:
                 tag = release.get('tag_name')
-                if not tag or release.get('prerelease'):
+                if not tag or (release.get('prerelease') and user_type != "devel"):
                     continue
                 try:
                     current_version = parse_version(tag)
@@ -1832,8 +1832,8 @@ def install(targets, build_type):
                 continue
             processed_packages.add((package_name, version))
 
-            suffix = "pre-release" if user_type == "devel" else "release"
-            asset_name = f"{package_name}-{os_type}-{os_version}-{architecture}-{suffix}-{version}.zip"
+            # suffix = "pre-release" if user_type == "devel" else "release"
+            asset_name = f"{package_name}-{os_type}-{os_version}-{architecture}-{build_type}-{version}.zip"
             asset_api_url = next((asset['url'] for asset in release_data.get('assets', []) if asset['name'] == asset_name), None)
 
             if not asset_api_url:
@@ -2449,8 +2449,7 @@ def list_all_available_packages():
                 try:
                     version_obj = parse_version(tag)
                     # Construct the expected asset filenames
-                    suffix = "pre-release" if user_type == "devel" else "release"
-                    expected_asset_release = f"{package_name}-{os_type}-{os_version}-{architecture}-{suffix}-{tag}.zip"
+                    expected_asset_release = f"{package_name}-{os_type}-{os_version}-{architecture}-{build_type}-{tag}.zip"
                     expected_asset_debug = f"{package_name}-{os_type}-{os_version}-{architecture}-debug-{tag}.zip"
 
                     # Check for a matching asset
@@ -2552,9 +2551,8 @@ def list_github_release_versions(package_name: str):
             try:
                 version_obj = parse_version(tag)
                 # Construct the expected asset filenames for release and debug builds
-                suffix = "pre-release" if user_type == "devel" else "release"
-                expected_asset_release = f"{package_name}-{os_type}-{os_version}-{architecture}-release{suffix}-{tag}.zip"
-                expected_asset_debug = f"{package_name}-{os_type}-{os_version}-{architecture}-debug{suffix}-{tag}.zip"
+                expected_asset_release = f"{package_name}-{os_type}-{os_version}-{architecture}-release-{tag}.zip"
+                expected_asset_debug = f"{package_name}-{os_type}-{os_version}-{architecture}-debug-{tag}.zip"
 
                 # Check if any asset in this release matches our expected filename
                 for asset in release.get('assets', []):
