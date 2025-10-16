@@ -1626,7 +1626,7 @@ def release(target, build_type):
                 print(f"✅ Release '{tag_name}' does not exist. Creating a new one...")
                 gh_create_cmd = [
                     "gh", "release", "create", tag_name, archive_file_str,
-                    "--repo", repo_slug, "--title", f"Release {tag_name}",
+                    "--repo", repo_slug, "--title", f"{tag_name}",
                     "--notes", f"Automated release of version {version}.",
                     "--prerelease"
                 ]
