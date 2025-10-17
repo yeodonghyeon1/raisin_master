@@ -1530,7 +1530,7 @@ def release(target, build_type):
                 subprocess.run(build_command, cwd=build_dir, check=True, text=True)
             else:
                 cmake_command = ["cmake",
-                                 "--preset", build_type.lower(),
+                                 "--preset", f"windows-{build_type.lower()}",
                                  "-S", script_directory,
                                  "-B", build_dir,
                                  f"-DCMAKE_TOOLCHAIN_FILE={script_directory}/vcpkg/scripts/buildsystems/vcpkg.cmake",
@@ -3208,7 +3208,7 @@ if __name__ == '__main__':
             else:
                 try:
                     cmake_command = ["cmake",
-                                     "--preset", build_type.lower(),
+                                     "--preset", f"windows-{build_type.lower()}",
                                      "-S", script_directory,
                                      "-B", build_dir,
                                      f"-DCMAKE_TOOLCHAIN_FILE={script_directory}/vcpkg/scripts/buildsystems/vcpkg.cmake",
