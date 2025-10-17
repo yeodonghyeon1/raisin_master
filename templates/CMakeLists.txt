@@ -4,6 +4,13 @@ set(CMAKE_CXX_STANDARD 17)       # Use C++17
 set(CMAKE_CXX_STANDARD_REQUIRED ON) # Ensure the standard is required
 set(CMAKE_CXX_EXTENSIONS OFF)       # Disable compiler-specific extensions (e.g., GNU extensions)
 
+# Block vcpkg on Linux
+if(UNIX AND NOT APPLE)
+    if(DEFINED CMAKE_TOOLCHAIN_FILE AND CMAKE_TOOLCHAIN_FILE MATCHES "vcpkg")
+        message(FATAL_ERROR "vcpkg is not supported on Linux. Please build without the vcpkg toolchain.")
+    endif()
+endif()
+
 option(RAISIN_RELEASE_BUILD "Build unit tests for the project" OFF)
 
 if(NOT RAISIN_RELEASE_BUILD)
