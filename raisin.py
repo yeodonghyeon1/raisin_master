@@ -51,6 +51,7 @@ TYPE_MAPPING = {
 }
 
 class Colors:
+    YELLOW = "\033[93m"
     GREEN = '\033[92m'  # Bright Green
     BLUE = '\033[94m'   # Bright Blue
     RED = '\033[91m'    # Bright Red
@@ -2416,7 +2417,7 @@ def list_all_available_packages():
     session = requests.Session()
 
     def get_versions_for_package(package_name):
-        """Fetches and processes release versions with valid assets for a single package."""
+        """Fetches and processes release versions with valid assets for a single package (colors prerelease vs release)."""
         repo_info = all_repositories.get(package_name)
         if not repo_info or 'url' not in repo_info:
             return package_name, ["(No repository URL found)"]
@@ -2441,21 +2442,24 @@ def list_all_available_packages():
             if not releases_list:
                 return package_name, ["(No releases found)"]
 
+            # Collect (version_obj, is_prerelease) for releases that have a matching asset
             available_versions = []
             for release in releases_list:
                 tag = release.get('tag_name')
-                if not tag or release.get('prerelease'):
+                if not tag:
                     continue
+                is_prerelease = bool(release.get('prerelease'))
                 try:
                     version_obj = parse_version(tag)
+
                     # Construct the expected asset filenames
-                    expected_asset_release = f"{package_name}-{os_type}-{os_version}-{architecture}-{build_type}-{tag}.zip"
+                    expected_asset_release = f"{package_name}-{os_type}-{os_version}-{architecture}-release-{tag}.zip"
                     expected_asset_debug = f"{package_name}-{os_type}-{os_version}-{architecture}-debug-{tag}.zip"
 
                     # Check for a matching asset
                     for asset in release.get('assets', []):
                         if asset['name'] == expected_asset_release or asset['name'] == expected_asset_debug:
-                            available_versions.append(version_obj)
+                            available_versions.append((version_obj, is_prerelease))
                             break
                 except InvalidVersion:
                     continue
@@ -2463,12 +2467,22 @@ def list_all_available_packages():
             if not available_versions:
                 return package_name, ["(No compatible assets found)"]
 
-            # Return the top 3 newest versions that have assets
-            sorted_versions = sorted(available_versions, reverse=True)
-            return package_name, [str(v) for v in sorted_versions[:3]]
+            # Sort newest-first by version, then colorize prerelease vs release
+            sorted_versions = sorted(available_versions, key=lambda x: x[0], reverse=True)
+
+            colored = []
+            for version_obj, is_prerelease in sorted_versions[:3]:
+                text = str(version_obj)  # normalized version string
+                if is_prerelease:
+                    colored.append(f"{Colors.YELLOW}{text}{Colors.RESET}")
+                else:
+                    colored.append(f"{Colors.GREEN}{text}{Colors.RESET}")
+
+            return package_name, colored
 
         except requests.exceptions.RequestException:
             return package_name, ["(API Error)"]
+
 
     # --- Fetch versions concurrently for all packages ---
     results = {}
@@ -3109,7 +3123,7 @@ if __name__ == '__main__':
             # 6. Print the aligned, colored results
             print_aligned_results(final_print_data)
         else:
-            print("❌ Error: Invalid 'index' command. Use: index 'remote' or index 'local'")
+            print("❌ Error: Invalid 'index' command. Use: index release or index 'local")
 
     elif sys.argv[1] == 'install':
         # Set default build type
