@@ -1398,7 +1398,7 @@ def setup(package_name = "", build_type = "", build_dir = ""):
 
     packages_to_ignore = get_packages_to_ignore()
 
-    action_files = find_interface_files([src_dir], ['action'], packages_to_ignore)[0]
+    action_files = find_interface_files(['src'], ['action'], packages_to_ignore)[0]
 
     project_directories = find_project_directories([src_dir], install_dir, packages_to_ignore)
 
@@ -1406,7 +1406,7 @@ def setup(package_name = "", build_type = "", build_dir = ""):
     for action_file in action_files:
         create_action_file(action_file, Path(action_file).parent.parent, install_dir)
 
-    msg_files, srv_files = find_interface_files([src_dir, 'temp'], ['msg', 'srv'], packages_to_ignore)
+    msg_files, srv_files = find_interface_files(['src', 'temp'], ['msg', 'srv'], packages_to_ignore)
 
     # Handle .msg files
     for msg_file in msg_files:
