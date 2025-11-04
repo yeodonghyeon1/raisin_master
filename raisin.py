@@ -51,6 +51,7 @@ TYPE_MAPPING = {
 }
 
 class Colors:
+    YELLOW = "\033[93m"
     GREEN = '\033[92m'  # Bright Green
     BLUE = '\033[94m'   # Bright Blue
     RED = '\033[91m'    # Bright Red
@@ -1479,11 +1480,210 @@ def setup(package_name = "", build_type = "", build_dir = ""):
     collect_src_vcpkg_dependencies()
     generate_vcpkg_json()
 
+def _repo_slug_from_cfg(package_name: str, repositories: Dict[str, Any]) -> Optional[Tuple[str,str]]:
+    """Return (owner, repo) for a package from configuration_setting.yaml or None."""
+    info = repositories.get(package_name)
+    if not info or 'url' not in info:
+        return None
+    m = re.search(r'git@github\.com:(.*?)/(.*?)\.git', info['url'])
+    if not m:
+        return None
+    return m.group(1), m.group(2)
+
+def _get_latest_nonprerelease_release(owner: str, repo: str, token: Optional[str]) -> Optional[Dict[str, Any]]:
+    """
+    Return the latest *non-prerelease* GitHub release object (dict) or None.
+    """
+    session = requests.Session()
+    headers = {'Accept': 'application/vnd.github.v3+json'}
+    if token:
+        headers['Authorization'] = f'token {token}'
+    resp = session.get(f"https://api.github.com/repos/{owner}/{repo}/releases", headers=headers, timeout=15)
+    resp.raise_for_status()
+    releases = resp.json()
+    # Sort by created_at desc and filter prerelease==False
+    stable = [r for r in releases if not r.get('prerelease')]
+    if not stable:
+        return None
+    # Prefer the greatest semver tag if tags are semantic, else fallback to created_at
+    def tag_key(r):
+        try:
+            return parse_version(r.get('tag_name') or '0.0.0')
+        except Exception:
+            return parse_version('0.0.0')
+    stable.sort(key=tag_key, reverse=True)
+    return stable[0]
+
+def _extract_commit_from_body(body: str) -> Optional[str]:
+    """
+    Pull a git commit hash (7-40 hex) from the release body; prefers 40-char SHA.
+    """
+    if not body:
+        return None
+    # Prefer full sha-1 first
+    m = re.search(r'\b[0-9a-f]{40}\b', body, re.IGNORECASE)
+    if m:
+        return m.group(0)
+    # else allow short SHAs (>=7 chars)
+    m = re.search(r'\b[0-9a-f]{7,40}\b', body, re.IGNORECASE)
+    return m.group(0) if m else None
+
+def _is_worktree_dirty(repo_path: str) -> bool:
+    """True if there are uncommitted changes in repo_path."""
+    out = _run_git_command(['git', 'status', '--porcelain'], repo_path)
+    return bool(out)
+
+def _guard_require_version_bump_for_src_packages():
+    """
+    Enforce:
+      1) local src version == latest non-prerelease release version, AND
+      2) (release commit != HEAD) OR (release commit == HEAD AND worktree dirty)
+    → Raise SystemExit with a clear error asking to bump the version.
+    """
+    script_dir = Path(script_directory)
+    src_dir = script_dir / 'src'
+
+    repositories, tokens, user_type, _ = load_configuration()
+
+    if not src_dir.is_dir():
+        return  # nothing to check
+
+    violations = []
+
+    for pkg_dir in sorted([p for p in src_dir.iterdir() if p.is_dir()]):
+        package_name = pkg_dir.name
+        release_yaml = pkg_dir / 'release.yaml'
+        if not release_yaml.is_file():
+            continue
+
+        # Local version
+        try:
+            with open(release_yaml, 'r') as f:
+                info = yaml.safe_load(f) or {}
+            local_version = str(info.get('version', '')).strip()
+            if not local_version:
+                continue  # nothing to compare
+        except Exception:
+            continue
+
+        slug = _repo_slug_from_cfg(package_name, repositories)
+        if not slug:
+            continue
+        owner, repo = slug
+
+        token = tokens.get(owner) or tokens.get('github.com') or None
+        latest = None
+        try:
+            latest = _get_latest_nonprerelease_release(owner, repo, token)
+        except Exception:
+            # If we cannot query, do not block setup; just continue.
+            continue
+
+        if not latest:
+            continue
+
+        latest_tag = (latest.get('tag_name') or '').strip()
+        # Normalize tags in case tags are like "v1.2.3"
+        def norm(v):
+            return v[1:] if v.startswith('v') else v
+        if norm(latest_tag) != norm(local_version):
+            continue  # versions differ → OK, no guard trips
+
+        # Compare commits
+        latest_commit_in_body = _extract_commit_from_body(latest.get('body') or '')
+        local_commit = get_commit_hash(str(pkg_dir))
+        dirty = _is_worktree_dirty(str(pkg_dir))
+
+        if (latest_commit_in_body != local_commit) or (latest_commit_in_body == local_commit and dirty):
+            # Build a helpful message for this package
+            details = []
+            details.append(f"version={local_version}")
+            details.append(f"latest_release_tag={latest_tag}")
+            details.append(f"release_commit={latest_commit_in_body or 'N/A'}")
+            details.append(f"local_commit={local_commit or 'N/A'}")
+            details.append(f"worktree_dirty={dirty}")
+            violations.append({
+                "package": package_name,
+                "version": local_version,
+                "latest_tag": latest_tag,
+                "release_commit": latest_commit_in_body or "N/A",
+                "local_commit": local_commit or "N/A",
+                "dirty": dirty,
+            })
+
+    if violations:
+        # --- pretty, colored output ---
+        BOLD = "\033[1m"
+        RESET = Colors.RESET
+
+        def short_sha(s: Optional[str]) -> str:
+            s = s or "N/A"
+            return s[:10]
+
+        title = f"{Colors.RED}{BOLD}❌ Version bump required before setup{RESET}"
+        subtitle = (
+            "Your local source version matches the latest stable release, "
+            "but commits differ or the working tree has changes.\n"
+            "Please bump the version in:  src/<package>/release.yaml"
+        )
+
+        headers = ["PACKAGE", "VERSION", "LATEST TAG", "RELEASE COMMIT", "LOCAL COMMIT", "DIRTY"]
+
+        def w(text): return get_display_width(str(text))
+
+        # compute column widths (use 10-char commit display)
+        col_widths = [w(h) for h in headers]
+        for row in violations:
+            col_widths[0] = max(col_widths[0], w(row["package"]))
+            col_widths[1] = max(col_widths[1], w(row["version"]))
+            col_widths[2] = max(col_widths[2], w(row["latest_tag"]))
+            col_widths[3] = max(col_widths[3], w(short_sha(row["release_commit"])))
+            col_widths[4] = max(col_widths[4], w(short_sha(row["local_commit"])))
+            col_widths[5] = max(col_widths[5], w(str(row["dirty"])))
+
+        def fmt_row(vals):
+            cells = []
+            for i, v in enumerate(vals):
+                s = str(v)
+                pad = col_widths[i] - w(s)
+                cells.append(s + " " * pad)
+            return " | ".join(cells)
+
+        header_line = fmt_row(headers)
+        sep = "-" * get_display_width(header_line)
+
+        body_lines = []
+        for row in violations:
+            body_lines.append(fmt_row([
+                row["package"],
+                row["version"],
+                row["latest_tag"],
+                short_sha(row["release_commit"]),
+                short_sha(row["local_commit"]),
+                row["dirty"],
+            ]))
+
+        msg = (
+                f"\n{title}\n"
+                f"{Colors.YELLOW}{subtitle}{RESET}\n\n"
+                f"{header_line}\n{sep}\n" +
+                "\n".join(body_lines) +
+                "\n"
+        )
+
+        print(msg)
+        sys.exit(1)
+
+
+
 def release(target, build_type):
     """
     Builds the project, creates a release archive, and uploads it to GitHub,
     prompting for overwrite if the asset already exists.
     """
+
+    _guard_require_version_bump_for_src_packages()
+
     # --- This initial part of the function remains the same ---
     target_dir = os.path.join(script_directory, 'src', target)
     install_dir = f"{script_directory}/release/install/{target}/{os_type}/{os_version}/{architecture}/{build_type}"
@@ -1577,6 +1777,13 @@ def release(target, build_type):
 
             print("\n--- Uploading to GitHub Release ---")
 
+            # Determine the commit hash of the package being released
+            pkg_repo_path = os.path.join(script_directory, 'src', target)
+            pkg_commit_hash = get_commit_hash(pkg_repo_path) or "UNKNOWN"
+
+            # This will replace the old generic notes
+            new_release_notes = f"Commit: {pkg_commit_hash}\nBuilt from {os_type}-{os_version}-{architecture} ({build_type})."
+
             release_info = repositories.get(target)
             if not (release_info and release_info.get('url')):
                 print(f"ℹ️ Repository URL for '{target}' not found in configuration_setting.yaml. Skipping GitHub release.")
@@ -1627,7 +1834,7 @@ def release(target, build_type):
                 gh_create_cmd = [
                     "gh", "release", "create", tag_name, archive_file_str,
                     "--repo", repo_slug, "--title", f"{tag_name}",
-                    "--notes", f"Automated release of version {version}.",
+                    "--notes", new_release_notes,
                     "--prerelease"
                 ]
                 subprocess.run(gh_create_cmd, check=True, capture_output=True, text=True, env=auth_env)
@@ -1645,6 +1852,15 @@ def release(target, build_type):
                         "--repo", repo_slug, "--clobber"
                     ]
                     subprocess.run(gh_upload_cmd, check=True, capture_output=True, text=True, env=auth_env)
+
+                    # Ensure release notes reflect the commit used for this asset
+                    gh_edit_cmd = [
+                        "gh", "release", "edit", tag_name,
+                        "--repo", repo_slug,
+                        "--notes", new_release_notes
+                    ]
+                    subprocess.run(gh_edit_cmd, check=True, capture_output=True, text=True, env=auth_env)
+
                     print(f"✅ Successfully overwrote asset in release '{tag_name}'.")
                 else:
                     print(f"🚫 Upload for '{archive_filename}' cancelled by user.")
@@ -1655,6 +1871,14 @@ def release(target, build_type):
                     "--repo", repo_slug
                 ]
                 subprocess.run(gh_upload_cmd, check=True, capture_output=True, text=True, env=auth_env)
+
+                gh_edit_cmd = [
+                    "gh", "release", "edit", tag_name,
+                    "--repo", repo_slug,
+                    "--notes", new_release_notes
+                ]
+                subprocess.run(gh_edit_cmd, check=True, capture_output=True, text=True, env=auth_env)
+
                 print(f"✅ Successfully uploaded asset to release '{tag_name}'.")
 
     # Keep your existing exception handling
@@ -1775,7 +1999,7 @@ def install(targets, build_type):
         if check_local_package(local_src_path, "local source"):
             continue
         if local_src_path.is_dir():
-            print(f"❌ Error: Different version of '{package_name}' exists in local source")
+            print(f"Skipping '{package_name}' because it exists in local source")
             continue
 
         # Priority 3: Find and install remote release
@@ -2416,7 +2640,7 @@ def list_all_available_packages():
     session = requests.Session()
 
     def get_versions_for_package(package_name):
-        """Fetches and processes release versions with valid assets for a single package."""
+        """Fetches and processes release versions with valid assets for a single package (colors prerelease vs release)."""
         repo_info = all_repositories.get(package_name)
         if not repo_info or 'url' not in repo_info:
             return package_name, ["(No repository URL found)"]
@@ -2441,21 +2665,24 @@ def list_all_available_packages():
             if not releases_list:
                 return package_name, ["(No releases found)"]
 
+            # Collect (version_obj, is_prerelease) for releases that have a matching asset
             available_versions = []
             for release in releases_list:
                 tag = release.get('tag_name')
-                if not tag or release.get('prerelease'):
+                if not tag:
                     continue
+                is_prerelease = bool(release.get('prerelease'))
                 try:
                     version_obj = parse_version(tag)
+
                     # Construct the expected asset filenames
-                    expected_asset_release = f"{package_name}-{os_type}-{os_version}-{architecture}-{build_type}-{tag}.zip"
+                    expected_asset_release = f"{package_name}-{os_type}-{os_version}-{architecture}-release-{tag}.zip"
                     expected_asset_debug = f"{package_name}-{os_type}-{os_version}-{architecture}-debug-{tag}.zip"
 
                     # Check for a matching asset
                     for asset in release.get('assets', []):
                         if asset['name'] == expected_asset_release or asset['name'] == expected_asset_debug:
-                            available_versions.append(version_obj)
+                            available_versions.append((version_obj, is_prerelease))
                             break
                 except InvalidVersion:
                     continue
@@ -2463,12 +2690,22 @@ def list_all_available_packages():
             if not available_versions:
                 return package_name, ["(No compatible assets found)"]
 
-            # Return the top 3 newest versions that have assets
-            sorted_versions = sorted(available_versions, reverse=True)
-            return package_name, [str(v) for v in sorted_versions[:3]]
+            # Sort newest-first by version, then colorize prerelease vs release
+            sorted_versions = sorted(available_versions, key=lambda x: x[0], reverse=True)
+
+            colored = []
+            for version_obj, is_prerelease in sorted_versions[:3]:
+                text = str(version_obj)  # normalized version string
+                if is_prerelease:
+                    colored.append(f"{Colors.YELLOW}{text}{Colors.RESET}")
+                else:
+                    colored.append(f"{Colors.GREEN}{text}{Colors.RESET}")
+
+            return package_name, colored
 
         except requests.exceptions.RequestException:
             return package_name, ["(API Error)"]
+
 
     # --- Fetch versions concurrently for all packages ---
     results = {}
@@ -3109,7 +3346,7 @@ if __name__ == '__main__':
             # 6. Print the aligned, colored results
             print_aligned_results(final_print_data)
         else:
-            print("❌ Error: Invalid 'index' command. Use: index 'remote' or index 'local'")
+            print("❌ Error: Invalid 'index' command. Use: index release or index 'local")
 
     elif sys.argv[1] == 'install':
         # Set default build type
