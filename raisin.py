@@ -1560,7 +1560,7 @@ def _guard_require_version_bump_for_src_packages():
         try:
             with open(release_yaml, 'r') as f:
                 info = yaml.safe_load(f) or {}
-            local_version = str(info.get('version', '')).strip()
+            local_version = 'v' + str(info.get('version', '')).strip()
             if not local_version:
                 continue  # nothing to compare
         except Exception:
