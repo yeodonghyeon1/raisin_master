@@ -1880,12 +1880,16 @@ def release(target, build_type):
     # Keep your existing exception handling
     except FileNotFoundError as e:
         print(f"❌ Command not found: '{e.filename}'. Is the required tool (cmake, ninja, zip, gh) installed and in your PATH?")
+        sys.exit(1)
     except subprocess.CalledProcessError as e:
         print(f"❌ A command failed with exit code {e.returncode}:\n{e.stderr}")
+        sys.exit(1)
     except yaml.YAMLError as e:
         print(f"🔥 Error parsing YAML file: {e}")
+        sys.exit(1)
     except Exception as e:
         print(f"🔥 An unexpected error occurred: {e}")
+        sys.exit(1)
 
 def install(targets, build_type):
     """
