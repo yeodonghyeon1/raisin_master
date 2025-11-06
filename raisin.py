@@ -1869,12 +1869,6 @@ def release(target, build_type):
                 ]
                 subprocess.run(gh_upload_cmd, check=True, capture_output=True, text=True, env=auth_env)
 
-                gh_edit_cmd = [
-                    "gh", "release", "edit", tag_name,
-                    "--repo", repo_slug
-                ]
-                subprocess.run(gh_edit_cmd, check=True, capture_output=True, text=True, env=auth_env)
-
                 print(f"✅ Successfully uploaded asset to release '{tag_name}'.")
 
     # Keep your existing exception handling
