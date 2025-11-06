@@ -117,8 +117,12 @@ if command -v pre-commit &> /dev/null || /usr/bin/python3 -m pre_commit --versio
     echo -e "${GREEN}✅ pre-commit is already installed.${NC}"
 else
     echo "pre-commit not found. Attempting installation..."
+    # Attempt 0: Try Linux installation
+    # Linux Installation Logic
+    if [[ "$(uname)" == "Linux" ]] && $SUDO apt install pre-commit; then
+        echo -e "${GREEN}✅ pre-commit installed to system via apt.${NC}"
     # Attempt 1: System-wide install (most reliable for git hooks)
-    if $SUDO /usr/bin/python3 -m pip install $PIP_FLAGS pre-commit; then
+    elif $SUDO /usr/bin/python3 -m pip install $PIP_FLAGS pre-commit; then
         echo -e "${GREEN}✅ pre-commit installed to system Python via pip.${NC}"
     # Attempt 2: Current user install via `python3 -m pip` (safer fallback)
     elif python3 -m pip install --user pre-commit; then
