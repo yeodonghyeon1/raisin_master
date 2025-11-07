@@ -10,6 +10,11 @@ import fnmatch
 import concurrent.futures
 from typing import List, Tuple, Dict, Any, Set, Optional
 from commands.help import print_help
+from commands.install import install_command
+from commands.index import index_release_command, index_local_command
+from commands.git_commands import git_status_command, git_pull_command, git_setup_remotes_command
+from commands import globals as g
+from commands.utils import get_os_info, delete_directory
 from script.build_tools import find_build_tools
 
 from packaging.version import parse as parse_version
@@ -3170,6 +3175,20 @@ if __name__ == '__main__':
     script_directory = Path(os.path.dirname(os.path.realpath(__file__))).as_posix()
     os_type, architecture, os_version, visual_studio_path, ninja_path, developer_env = get_os_info()
 
+    # Initialize commands.globals for modular commands
+    g.init_globals(
+        script_directory=script_directory,
+        os_type=os_type,
+        architecture=architecture,
+        os_version=os_version,
+        ninja_path=ninja_path,
+        visual_studio_path=visual_studio_path,
+        developer_env=developer_env,
+        build_pattern=[],
+        vcpkg_dependencies=set(),
+        always_yes=False
+    )
+
     delete_directory(os.path.join(script_directory, 'temp'))
 
     # Display help if no arguments are given or if help is explicitly requested
@@ -3180,6 +3199,7 @@ if __name__ == '__main__':
     always_yes = '--yes' in sys.argv
     if always_yes:
         sys.argv.remove('--yes')
+        g.always_yes = True  # Update commands.globals
 
     if len(sys.argv) == 1 or sys.argv[1] == 'setup' or sys.argv[1] == 'build':
         targets = sys.argv[2:]
@@ -3250,39 +3270,14 @@ if __name__ == '__main__':
             # Case 1: Package name is provided, list its versions
             if len(sys.argv) == 4:
                 package_name = sys.argv[3]
-                list_github_release_versions(package_name)
+                index_release_command(package_name)
             # Case 2: No package name, list all available packages
             elif len(sys.argv) == 3:
-                list_all_available_packages()
+                index_release_command()
             else:
                 print("❌ Error: Invalid 'index versions' command. Provide zero or one package name.")
         elif len(sys.argv) >= 3 and sys.argv[2] == 'local':
-            targets_to_process = find_target_yamls(Path(script_directory) / 'src',
-                                                   Path(script_directory) / 'release' / 'install')
-
-            if not targets_to_process:
-                print("Found no packages with release.yaml files in specified locations.")
-
-            # 2. PASS 1: Run parallel parsing
-            # all_parse_results format: [(name, ver, raw_deps_list, origin), ...]
-            all_parse_results = run_parallel_parse(targets_to_process)
-
-            # 3. Build the Package Database for validation
-            # This map contains ONLY valid packages that can be dependencies.
-            package_db: Dict[str, str] = {}
-            for name, ver, deps_list, origin in all_parse_results:
-                if ver not in ("ERROR", "N/A"):
-                    package_db[name] = ver
-
-            # 4. PASS 2: Run parallel validation using the database
-            # final_print_data format: [(name, ver, colored_deps_str, origin), ...]
-            final_print_data = run_parallel_validation(all_parse_results, package_db)
-
-            # 5. Sort the final list alphabetically
-            final_print_data.sort(key=lambda x: x[0])
-
-            # 6. Print the aligned, colored results
-            print_aligned_results(final_print_data)
+            index_local_command()
         else:
             print("❌ Error: Invalid 'index' command. Use: index release or index 'local")
 
@@ -3301,25 +3296,25 @@ if __name__ == '__main__':
             targets = targets[:-1]
 
         # Call the install function with the parsed arguments
-        install(targets, build_type)
+        install_command(targets, build_type)
 
     elif len(sys.argv) >= 3 and sys.argv[1] == 'git':
-        # Ensure GitHub authentication before any git operations
+        # Git commands using modular functions
 
         if sys.argv[2] == 'status':
-            manage_git_repos(pull_mode=False)
+            git_status_command()
         if sys.argv[2] == 'pull':
             if len(sys.argv) >= 4:
-                manage_git_repos(pull_mode=True, origin=sys.argv[3])
+                git_pull_command(origin=sys.argv[3])
             else:
-                manage_git_repos(pull_mode=True)
+                git_pull_command()
         elif sys.argv[2] == 'setup':
             if len(sys.argv) < 4:
                 print("❌ Error: Please provide at least one remote specification.")
                 print("   Usage: python raisin.py git setup <name1:user1> <name2:user2> ...")
             else:
                 remote_specs = sys.argv[3:]
-                setup_git_remotes(remote_specs)
+                git_setup_remotes_command(remote_specs)
 
     else:
         print("❌ Error: No command-line arguments were provided.")
