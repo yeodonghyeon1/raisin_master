@@ -13,6 +13,9 @@ from commands.help import print_help
 from commands.install import install_command
 from commands.index import index_release_command, index_local_command
 from commands.git_commands import git_status_command, git_pull_command, git_setup_remotes_command
+from commands.build import build_command
+from commands.setup import setup
+from commands.release import release
 from commands import globals as g
 from commands.utils import get_os_info, delete_directory
 from script.build_tools import find_build_tools
@@ -3206,7 +3209,7 @@ if __name__ == '__main__':
 
         # 1. Find and parse all YAML files to create a master dictionary
         if len(sys.argv) > 3 and (Path(script_directory) / 'src' / sys.argv[2]).exists():
-            build_pattern =[name for name in os.listdir(Path(script_directory) / 'src' / sys.argv[2])
+            g.build_pattern =[name for name in os.listdir(Path(script_directory) / 'src' / sys.argv[2])
                             if os.path.isdir(os.path.join(Path(script_directory) / 'src' / sys.argv[2], name))]
         else:
             all_build_maps = {}
@@ -3230,12 +3233,12 @@ if __name__ == '__main__':
                 found_patterns.extend(patterns_for_target)
 
             # 3. Update the global build_pattern variable
-            build_pattern = found_patterns
+            g.build_pattern = found_patterns
 
-        if not build_pattern:
+        if not g.build_pattern:
             print("🛠️ building all patterns")
         else:
-            print(f"🛠️ building the following targets: {build_pattern}")
+            print(f"🛠️ building the following targets: {g.build_pattern}")
 
         setup()
 
@@ -3324,88 +3327,4 @@ if __name__ == '__main__':
         to_install = 'install' in build_types
         build_types = [bt for bt in build_types if bt != 'install']
 
-        if not 'debug' in build_types and not 'release' in build_types:
-            build_types.append('debug')
-
-        for build_type in build_types:
-            if build_type not in ['release', 'debug']:
-                continue
-
-            # 2. Run CMake
-            build_type = build_type.lower()
-            build_dir = Path(script_directory) / f'cmake-build-{build_type}'
-            build_type = build_type.capitalize()
-            delete_directory(build_dir)
-            build_dir.mkdir(parents=True, exist_ok=True)
-            print(f'building in {build_dir}, build type is {build_type}')
-
-            # CORRECTED command list
-            cmake_command = ["cmake",
-                             "-G", "Ninja",
-                             f"-DCMAKE_BUILD_TYPE={build_type.upper()}",
-                             ".."]
-            if platform.system().lower() == "linux":
-                try:
-                    cmake_command = ["cmake",
-                                     "-S", script_directory,
-                                     "-G", "Ninja",
-                                     "-B", build_dir,
-                                     f"-DCMAKE_BUILD_TYPE={build_type}"]
-                    subprocess.run(cmake_command, check=True, text=True)
-                except subprocess.CalledProcessError as e:
-                    # If the command fails, print its output to help with debugging
-                    print("--- CMake Command Failed ---", file=sys.stderr)
-                    print(f"Return Code: {e.returncode}", file=sys.stderr)
-                    print("\n--- STDOUT ---", file=sys.stderr)
-                    print(e.stdout, file=sys.stderr)
-                    print("\n--- STDERR ---", file=sys.stderr)
-                    print(e.stderr, file=sys.stderr)
-                    print("--------------------------", file=sys.stderr)
-                    sys.exit(1) # Exit with a failure code
-
-                print("✅ CMake configuration successful.")
-                print("🛠️  Building with Ninja...")
-                core_count = int(os.cpu_count() / 2) or 4
-                print(f"🔩 Using {core_count} cores for the build.")
-                if to_install:
-                    build_command = ["ninja", "install", f"-j{core_count}"]
-                else:
-                    build_command = ["ninja", f"-j{core_count}"]
-                subprocess.run(build_command, cwd=build_dir, check=True, text=True)
-
-            else:
-                try:
-                    cmake_command = ["cmake",
-                                     "--preset", f"windows-{build_type.lower()}",
-                                     "-S", script_directory,
-                                     "-B", build_dir,
-                                     f"-DCMAKE_TOOLCHAIN_FILE={script_directory}/vcpkg/scripts/buildsystems/vcpkg.cmake",
-                                     "-DRAISIN_RELEASE_BUILD=ON"]
-                    subprocess.run(cmake_command, check=True, text=True, env=developer_env)
-
-                except subprocess.CalledProcessError as e:
-                    # If the command fails, print its output to help with debugging
-                    print("--- CMake Command Failed ---", file=sys.stderr)
-                    print(f"Return Code: {e.returncode}", file=sys.stderr)
-                    print("\n--- STDOUT ---", file=sys.stderr)
-                    print(e.stdout, file=sys.stderr)
-                    print("\n--- STDERR ---", file=sys.stderr)
-                    print(e.stderr, file=sys.stderr)
-                    print("--------------------------", file=sys.stderr)
-                    sys.exit(1) # Exit with a failure code
-
-                print("✅ CMake configuration successful.")
-                print("🛠️  Building with Ninja...")
-
-                subprocess.run(
-                    ["cmake", "--build", str(build_dir), "--parallel"],
-                    check=True, text=True, env=developer_env
-                )
-
-                if to_install:
-                    subprocess.run(
-                        ["cmake", "--install", str(build_dir)],
-                        check=True, text=True, env=developer_env
-                    )
-
-        print("🎉🎉🎉 Building process finished successfully.")
+        build_command(build_types, to_install)
