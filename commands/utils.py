@@ -1,0 +1,206 @@
+"""
+Utility functions for RAISIN.
+
+Shared utilities used across multiple command modules.
+"""
+
+import os
+import sys
+import yaml
+import shutil
+import platform
+from pathlib import Path
+from typing import Dict, Tuple
+
+# Import globals
+from commands import globals as g
+
+
+def load_configuration():
+    """
+    Load configuration from configuration_setting.yaml and repositories.yaml.
+
+    Returns:
+        tuple: (all_repositories, tokens, user_type, packages_to_ignore)
+    """
+    script_dir_path = Path(g.script_directory)
+    config_path = script_dir_path / 'configuration_setting.yaml'
+
+    # Load repositories from repositories.yaml
+    all_repositories = {}
+    repo_path = script_dir_path / 'repositories.yaml'
+    if repo_path.is_file():
+        with open(repo_path, 'r') as f:
+            repo_data = yaml.safe_load(f)
+            if repo_data:
+                all_repositories = repo_data
+
+    tokens = {}
+    user_type = None
+    packages_to_ignore = []
+
+    if config_path.is_file():
+        with open(config_path, 'r') as f:
+            config = yaml.safe_load(f)
+            tokens = config.get('gh_tokens', {})
+            user_type = config.get('user_type')
+            packages_to_ignore = config.get('packages_to_ignore', [])
+    else:
+        secrets_path = script_dir_path / 'secrets.yaml'
+        if secrets_path.is_file():
+            with open(secrets_path, 'r') as f:
+                secrets = yaml.safe_load(f)
+                tokens = secrets.get('gh_tokens', {})
+                user_type = secrets.get('user_type')
+
+    # Validate user_type
+    if user_type is None:
+        print("❌ Error: 'user_type' is not specified in configuration_setting.yaml")
+        print("Please set 'user_type' to either 'user' or 'devel'")
+        sys.exit(1)
+
+    if user_type not in ['user', 'devel']:
+        print(f"❌ Error: Invalid 'user_type' value: '{user_type}'")
+        print("'user_type' must be either 'user' or 'devel' in configuration_setting.yaml")
+        sys.exit(1)
+
+    return all_repositories, tokens, user_type, packages_to_ignore
+
+
+def delete_directory(directory):
+    """
+    Delete a directory and all its contents if it exists.
+
+    Args:
+        directory: Path to the directory to delete
+    """
+    if os.path.exists(directory):
+        shutil.rmtree(directory)
+
+
+def is_root():
+    """
+    Check if the current user is root.
+
+    Returns:
+        bool: True if running as root, False otherwise
+    """
+    return os.geteuid() == 0
+
+
+def _read_os_release() -> Dict[str, str]:
+    """
+    Best-effort reader for Linux /etc/os-release. Uses platform.freedesktop_os_release()
+    when available; falls back to parsing the file manually. Returns {} on failure.
+
+    Returns:
+        Dict[str, str]: Dictionary of OS release information
+    """
+    # Python 3.10+ provides this:
+    if hasattr(platform, "freedesktop_os_release"):
+        try:
+            return platform.freedesktop_os_release()
+        except Exception:
+            pass
+
+    # Manual fallback for older Pythons
+    data: Dict[str, str] = {}
+    try:
+        with open("/etc/os-release", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                v = v.strip().strip('"')
+                data[k] = v
+    except Exception:
+        pass
+    return data
+
+
+def _normalize_arch(arch: str) -> str:
+    """
+    Normalize common architecture names across platforms.
+
+    Args:
+        arch: Raw architecture string from platform.machine()
+
+    Returns:
+        str: Normalized architecture name
+    """
+    m = (arch or "").lower()
+    mapping = {
+        "amd64": "x86_64",
+        "x64": "x86_64",
+        "x86_64": "x86_64",
+        "i386": "x86",
+        "i686": "x86",
+        "aarch64": "arm64",
+        "arm64": "arm64",
+        "armv7l": "armv7l",
+        "armv6l": "armv6l",
+        "ppc64le": "ppc64le",
+        "ppc64": "ppc64",
+        "s390x": "s390x",
+    }
+    return mapping.get(m, arch)
+
+
+def get_os_info() -> Tuple[str, str, str, str, str, dict]:
+    """
+    Returns (os_type, architecture, os_version, vs_path, ninja_path, developer_env)
+    across Linux/macOS/Windows.
+
+    - os_type:
+        Linux -> distro ID if available (e.g., 'ubuntu', 'fedora'), otherwise 'linux'
+        macOS -> 'macos'
+        Windows -> 'windows'
+        Other/Unix -> platform.system().lower()
+    - architecture: normalized machine type (e.g., 'x86_64', 'arm64')
+    - os_version:
+        Linux -> VERSION_ID from os-release if available, else kernel release
+        macOS -> product version (e.g., '14.5'), else kernel release
+        Windows -> major.minor.build from sys.getwindowsversion(), else win32_ver()/release()
+    - vs_path: Visual Studio path (Windows only)
+    - ninja_path: Ninja build tool path (Windows only)
+    - developer_env: Developer environment variables (Windows only)
+
+    Returns:
+        Tuple[str, str, str, str, str, dict]: OS information tuple
+    """
+    # Import here to avoid circular dependency
+    from script.build_tools import find_build_tools
+
+    system = platform.system()
+    arch = _normalize_arch(platform.machine())
+    vs_path2 = ""
+    ninja_path2 = ""
+    developer_env2 = dict()
+
+    if system == "Linux":
+        osr = _read_os_release()
+        os_type2 = (osr.get("ID") or "linux").lower()
+        os_version2 = osr.get("VERSION_ID") or platform.release()
+
+    elif system == "Darwin":
+        os_type2 = "macos"
+        mac_release, _, _ = platform.mac_ver()
+        os_version2 = mac_release or platform.release()
+
+    elif system == "Windows":
+        vs_path2, ninja_path2, developer_env2 = find_build_tools("amd64")
+        os_type2 = "windows"
+        try:
+            win = sys.getwindowsversion()  # (major, minor, build, platform, service_pack)
+            # os_version2 = f"{win.major}.{win.minor}.{win.build}"
+            os_version2 = "10or11"
+        except Exception:
+            release, version, _, _ = platform.win32_ver()
+            os_version2 = version or release or platform.release()
+
+    else:  # e.g., FreeBSD, OpenBSD, SunOS, etc.
+        os_type2 = system.lower() if system else "unknown"
+        os_version2 = platform.release()
+
+    return os_type2, arch, os_version2, vs_path2, ninja_path2, developer_env2
