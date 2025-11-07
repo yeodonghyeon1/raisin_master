@@ -5,74 +5,113 @@ function(raisin_find_package package_name)
 endfunction()
 
 function(raisin_install_without_config PROJECT_NAME)
+    # Parse optional arguments, specifically NAMESPACE
+    cmake_parse_arguments(ARG "" "NAMESPACE" "" ${ARGN})
+
     install(DIRECTORY include/ DESTINATION include)
 
+    # This command installs the targets and associates them with an export set.
+    # It does NOT take a NAMESPACE argument itself.
     install(
-        TARGETS ${PROJECT_NAME}
-        EXPORT export_${PROJECT_NAME}
-        LIBRARY DESTINATION lib
-        ARCHIVE DESTINATION lib
-        RUNTIME DESTINATION bin
-        INCLUDES DESTINATION include
+            TARGETS ${PROJECT_NAME}
+            EXPORT export_${PROJECT_NAME}
+            LIBRARY DESTINATION lib
+            ARCHIVE DESTINATION lib
+            RUNTIME DESTINATION bin
+            INCLUDES DESTINATION include
+            # The ${namespace_args} variable has been REMOVED from here.
     )
 
+    # Set up namespace arguments ONLY for the install(EXPORT) command
+    set(export_namespace_args)
+    if(ARG_NAMESPACE)
+        # The 'install(EXPORT)' command adds the '::' itself.
+        set(export_namespace_args NAMESPACE ${ARG_NAMESPACE})
+    endif()
+
+    # This command installs the export file (Targets.cmake)
+    # and *this* is where the namespace is applied.
     install(
-        EXPORT export_${PROJECT_NAME}
-        FILE ${PROJECT_NAME}Targets.cmake
-        DESTINATION lib/cmake/${PROJECT_NAME}
+            EXPORT export_${PROJECT_NAME}
+            FILE ${PROJECT_NAME}Targets.cmake
+            DESTINATION lib/cmake/${PROJECT_NAME}
+            ${export_namespace_args} # Apply namespace ONLY here
     )
 endfunction()
 
 function(raisin_install PROJECT_NAME)
-    raisin_install_without_config(${PROJECT_NAME})
+    # Parse for NAMESPACE keyword. Other args will be in ARG_UNPARSED_ARGUMENTS
+    cmake_parse_arguments(ARG "" "NAMESPACE" "" ${ARGN})
+
+    # Prepare namespace arguments to pass to the helper function
+    set(namespace_args)
+    if(ARG_NAMESPACE)
+        set(namespace_args NAMESPACE ${ARG_NAMESPACE})
+    endif()
+
+    # Call the base installer, passing along the namespace if it exists
+    raisin_install_without_config(${PROJECT_NAME} ${namespace_args})
+
     include(CMakePackageConfigHelpers)
 
     set(find_package_string "")
-    foreach(libName IN LISTS ARGN)
+    # Loop over the *remaining* arguments, which are the dependencies
+    foreach(libName IN LISTS ARG_UNPARSED_ARGUMENTS)
         string(APPEND find_package_string "find_package(${libName} REQUIRED)\n")
     endforeach()
 
     set(_package_config_in_content
-        "@PACKAGE_INIT@\n\n${find_package_string}\ninclude(\"\${CMAKE_CURRENT_LIST_DIR}/${PROJECT_NAME}Targets.cmake\")\n"
+            "@PACKAGE_INIT@\n\n${find_package_string}\ninclude(\"\${CMAKE_CURRENT_LIST_DIR}/${PROJECT_NAME}Targets.cmake\")\n"
     )
 
     set(_package_config_in_path "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}Config.cmake.in")
     file(WRITE "${_package_config_in_path}" "${_package_config_in_content}")
 
     configure_package_config_file(
-        "${_package_config_in_path}"
-        "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}Config.cmake"
-        INSTALL_DESTINATION "lib/cmake/${PROJECT_NAME}"
+            "${_package_config_in_path}"
+            "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}Config.cmake"
+            INSTALL_DESTINATION "lib/cmake/${PROJECT_NAME}"
     )
 
     install(
-        FILES
-        "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}Config.cmake"
-        DESTINATION lib/cmake/${PROJECT_NAME}
+            FILES
+            "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}Config.cmake"
+            DESTINATION lib/cmake/${PROJECT_NAME}
     )
 endfunction()
 
 function(raisin_install_config_string PROJECT_NAME CONFIG_STRING)
-    raisin_install_without_config(${PROJECT_NAME})
+    # Parse for NAMESPACE keyword from any extra arguments
+    cmake_parse_arguments(ARG "" "NAMESPACE" "" ${ARGN})
+
+    # Prepare namespace arguments to pass to the helper function
+    set(namespace_args)
+    if(ARG_NAMESPACE)
+        set(namespace_args NAMESPACE ${ARG_NAMESPACE})
+    endif()
+
+    # Call the base installer, passing along the namespace if it exists
+    raisin_install_without_config(${PROJECT_NAME} ${namespace_args})
+
     include(CMakePackageConfigHelpers)
 
     set(_package_config_in_content
-        "@PACKAGE_INIT@\n\n${CONFIG_STRING}\ninclude(\"\${CMAKE_CURRENT_LIST_DIR}/${PROJECT_NAME}Targets.cmake\")\n"
+            "@PACKAGE_INIT@\n\n${CONFIG_STRING}\ninclude(\"\${CMAKE_CURRENT_LIST_DIR}/${PROJECT_NAME}Targets.cmake\")\n"
     )
 
     set(_package_config_in_path "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}Config.cmake.in")
     file(WRITE "${_package_config_in_path}" "${_package_config_in_content}")
 
     configure_package_config_file(
-        "${_package_config_in_path}"
-        "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}Config.cmake"
-        INSTALL_DESTINATION "lib/cmake/${PROJECT_NAME}"
+            "${_package_config_in_path}"
+            "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}Config.cmake"
+            INSTALL_DESTINATION "lib/cmake/${PROJECT_NAME}"
     )
 
     install(
-        FILES
-        "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}Config.cmake"
-        DESTINATION lib/cmake/${PROJECT_NAME}
+            FILES
+            "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}Config.cmake"
+            DESTINATION lib/cmake/${PROJECT_NAME}
     )
 endfunction()
 

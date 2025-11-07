@@ -1397,7 +1397,7 @@ def setup(package_name = "", build_type = "", build_dir = ""):
 
     packages_to_ignore = get_packages_to_ignore()
 
-    action_files = find_interface_files([src_dir], ['action'], packages_to_ignore)[0]
+    action_files = find_interface_files(['src'], ['action'], packages_to_ignore)[0]
 
     project_directories = find_project_directories([src_dir], install_dir, packages_to_ignore)
 
@@ -1405,7 +1405,7 @@ def setup(package_name = "", build_type = "", build_dir = ""):
     for action_file in action_files:
         create_action_file(action_file, Path(action_file).parent.parent, install_dir)
 
-    msg_files, srv_files = find_interface_files([src_dir, 'temp'], ['msg', 'srv'], packages_to_ignore)
+    msg_files, srv_files = find_interface_files(['src', 'temp'], ['msg', 'srv'], packages_to_ignore)
 
     # Handle .msg files
     for msg_file in msg_files:
@@ -1781,7 +1781,7 @@ def release(target, build_type):
             pkg_commit_hash = get_commit_hash(pkg_repo_path) or "UNKNOWN"
 
             # This will replace the old generic notes
-            new_release_notes = f"Commit: {pkg_commit_hash}\nBuilt from {os_type}-{os_version}-{architecture} ({build_type})."
+            new_release_notes = f"Commit: {pkg_commit_hash}\n"
 
             release_info = repositories.get(target)
             if not (release_info and release_info.get('url')):
@@ -1811,11 +1811,13 @@ def release(target, build_type):
             # 1. Check if the release and asset already exist
             release_exists = True
             asset_exists = False
+            release_is_prerelease = False
             try:
                 print(f"Checking status of release '{tag_name}' in '{repo_slug}'...")
-                list_cmd = ["gh", "release", "view", tag_name, "--repo", repo_slug, "--json", "assets"]
+                list_cmd = ["gh", "release", "view", tag_name, "--repo", repo_slug, "--json", "assets,isPrerelease"]
                 result = subprocess.run(list_cmd, check=True, capture_output=True, text=True, env=auth_env)
                 release_data = json.loads(result.stdout)
+                release_is_prerelease = bool(release_data.get('isPrerelease'))
                 existing_assets = [asset['name'] for asset in release_data.get('assets', [])]
                 if archive_filename in existing_assets:
                     asset_exists = True
@@ -1839,26 +1841,21 @@ def release(target, build_type):
                 subprocess.run(gh_create_cmd, check=True, capture_output=True, text=True, env=auth_env)
                 print(f"✅ Successfully created new release and uploaded '{archive_filename}'.")
             elif asset_exists:
-                if not always_yes:
-                    prompt = input(f"⚠️ Asset '{archive_filename}' already exists. Overwrite? (y/n): ").lower()
-                else:
-                    prompt = 'y'
+                should_overwrite = always_yes or release_is_prerelease
+                if release_is_prerelease and not always_yes:
+                    print("ℹ️ Release is marked as prerelease; overwriting existing asset without confirmation.")
 
-                if always_yes or prompt in ['y', 'yes']:
+                if not should_overwrite:
+                    prompt = input(f"⚠️ Asset '{archive_filename}' already exists. Overwrite? (y/n): ").lower()
+                    should_overwrite = prompt in ['y', 'yes']
+
+                if should_overwrite:
                     print(f"🚀 Overwriting asset...")
                     gh_upload_cmd = [
                         "gh", "release", "upload", tag_name, archive_file_str,
                         "--repo", repo_slug, "--clobber"
                     ]
                     subprocess.run(gh_upload_cmd, check=True, capture_output=True, text=True, env=auth_env)
-
-                    # Ensure release notes reflect the commit used for this asset
-                    gh_edit_cmd = [
-                        "gh", "release", "edit", tag_name,
-                        "--repo", repo_slug,
-                        "--notes", new_release_notes
-                    ]
-                    subprocess.run(gh_edit_cmd, check=True, capture_output=True, text=True, env=auth_env)
 
                     print(f"✅ Successfully overwrote asset in release '{tag_name}'.")
                 else:
@@ -1871,24 +1868,21 @@ def release(target, build_type):
                 ]
                 subprocess.run(gh_upload_cmd, check=True, capture_output=True, text=True, env=auth_env)
 
-                gh_edit_cmd = [
-                    "gh", "release", "edit", tag_name,
-                    "--repo", repo_slug,
-                    "--notes", new_release_notes
-                ]
-                subprocess.run(gh_edit_cmd, check=True, capture_output=True, text=True, env=auth_env)
-
                 print(f"✅ Successfully uploaded asset to release '{tag_name}'.")
 
     # Keep your existing exception handling
     except FileNotFoundError as e:
         print(f"❌ Command not found: '{e.filename}'. Is the required tool (cmake, ninja, zip, gh) installed and in your PATH?")
+        sys.exit(1)
     except subprocess.CalledProcessError as e:
         print(f"❌ A command failed with exit code {e.returncode}:\n{e.stderr}")
+        sys.exit(1)
     except yaml.YAMLError as e:
         print(f"🔥 Error parsing YAML file: {e}")
+        sys.exit(1)
     except Exception as e:
         print(f"🔥 An unexpected error occurred: {e}")
+        sys.exit(1)
 
 def install(targets, build_type):
     """
