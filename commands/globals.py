@@ -40,10 +40,10 @@ def init_globals(**kwargs):
     global os_type, architecture, os_version, script_directory
     global ninja_path, visual_studio_path, developer_env
 
-    os_type = kwargs.get('os_type', '')
-    architecture = kwargs.get('architecture', '')
-    os_version = kwargs.get('os_version', '')
-    script_directory = kwargs.get('script_directory', '')
-    ninja_path = kwargs.get('ninja_path', '')
-    visual_studio_path = kwargs.get('visual_studio_path', '')
-    developer_env = kwargs.get('developer_env', {})
+    os_type = kwargs.get("os_type", "")
+    architecture = kwargs.get("architecture", "")
+    os_version = kwargs.get("os_version", "")
+    script_directory = kwargs.get("script_directory", "")
+    ninja_path = kwargs.get("ninja_path", "")
+    visual_studio_path = kwargs.get("visual_studio_path", "")
+    developer_env = kwargs.get("developer_env", {})
