@@ -8,6 +8,7 @@ import re
 import os
 import yaml
 import requests
+import click
 import concurrent.futures
 from pathlib import Path
 from typing import List, Tuple, Dict, Optional, Set
@@ -51,7 +52,9 @@ def list_all_available_packages():
 
     # Get System Info for Asset Matching
     try:
-        print(f"ℹ️  Checking for assets compatible with: {os_type}-{os_version}-{architecture}")
+        print(
+            f"ℹ️  Checking for assets compatible with: {os_type}-{os_version}-{architecture}"
+        )
     except FileNotFoundError:
         print("❌ Error: Could not determine OS information from /etc/os-release.")
         return
@@ -75,19 +78,19 @@ def list_all_available_packages():
         Colors prerelease vs release.
         """
         repo_info = all_repositories.get(package_name)
-        if not repo_info or 'url' not in repo_info:
+        if not repo_info or "url" not in repo_info:
             return package_name, ["(No repository URL found)"]
 
-        git_url = repo_info['url']
-        match = re.search(r'git@github.com:(.*)/(.*)\.git', git_url)
+        git_url = repo_info["url"]
+        match = re.search(r"git@github.com:(.*)/(.*)\.git", git_url)
         if not match:
             return package_name, ["(Could not parse repository URL)"]
 
         owner, repo_name = match.groups()
-        token = tokens.get(owner, tokens.get('default'))
-        headers = {'Accept': 'application/vnd.github.v3+json'}
+        token = tokens.get(owner, tokens.get("default"))
+        headers = {"Accept": "application/vnd.github.v3+json"}
         if token:
-            headers['Authorization'] = f'token {token}'
+            headers["Authorization"] = f"token {token}"
 
         try:
             api_url = f"https://api.github.com/repos/{owner}/{repo_name}/releases"
@@ -101,10 +104,10 @@ def list_all_available_packages():
             # Collect (version_obj, is_prerelease) for releases that have a matching asset
             available_versions = []
             for release in releases_list:
-                tag = release.get('tag_name')
+                tag = release.get("tag_name")
                 if not tag:
                     continue
-                is_prerelease = bool(release.get('prerelease'))
+                is_prerelease = bool(release.get("prerelease"))
                 try:
                     version_obj = parse_version(tag)
 
@@ -113,8 +116,11 @@ def list_all_available_packages():
                     expected_asset_debug = f"{package_name}-{os_type}-{os_version}-{architecture}-debug-{tag}.zip"
 
                     # Check for a matching asset
-                    for asset in release.get('assets', []):
-                        if asset['name'] == expected_asset_release or asset['name'] == expected_asset_debug:
+                    for asset in release.get("assets", []):
+                        if (
+                            asset["name"] == expected_asset_release
+                            or asset["name"] == expected_asset_debug
+                        ):
                             available_versions.append((version_obj, is_prerelease))
                             break
                 except InvalidVersion:
@@ -124,7 +130,9 @@ def list_all_available_packages():
                 return package_name, ["(No compatible assets found)"]
 
             # Sort newest-first by version, then colorize prerelease vs release
-            sorted_versions = sorted(available_versions, key=lambda x: x[0], reverse=True)
+            sorted_versions = sorted(
+                available_versions, key=lambda x: x[0], reverse=True
+            )
 
             colored = []
             for version_obj, is_prerelease in sorted_versions[:3]:
@@ -177,7 +185,9 @@ def list_github_release_versions(package_name):
 
     # Get System Info for Asset Matching
     try:
-        print(f"ℹ️  Checking for assets compatible with: {os_type}-{os_version}-{architecture}")
+        print(
+            f"ℹ️  Checking for assets compatible with: {os_type}-{os_version}-{architecture}"
+        )
     except FileNotFoundError:
         print("❌ Error: Could not determine OS information from /etc/os-release.")
         return
@@ -194,13 +204,15 @@ def list_github_release_versions(package_name):
 
     # Find the repository URL for the package
     repo_info = all_repositories.get(package_name)
-    if not repo_info or 'url' not in repo_info:
-        print(f"❌ Error: No repository URL found for '{package_name}' in configuration_setting.yaml.")
+    if not repo_info or "url" not in repo_info:
+        print(
+            f"❌ Error: No repository URL found for '{package_name}' in configuration_setting.yaml."
+        )
         return
 
     # Parse Owner/Repo from URL
-    git_url = repo_info['url']
-    match = re.search(r'git@github.com:(.*)/(.*)\.git', git_url)
+    git_url = repo_info["url"]
+    match = re.search(r"git@github.com:(.*)/(.*)\.git", git_url)
     if not match:
         print(f"❌ Error: Could not parse GitHub owner/repo from URL '{git_url}'.")
         return
@@ -209,9 +221,14 @@ def list_github_release_versions(package_name):
 
     # Query the GitHub API
     session = requests.Session()
-    token = tokens.get(owner, tokens.get('default'))
+    token = tokens.get(owner, tokens.get("default"))
     if token:
-        session.headers.update({'Authorization': f'token {token}', 'Accept': 'application/vnd.github.v3+json'})
+        session.headers.update(
+            {
+                "Authorization": f"token {token}",
+                "Accept": "application/vnd.github.v3+json",
+            }
+        )
 
     try:
         api_url = f"https://api.github.com/repos/{owner}/{repo_name}/releases"
@@ -226,8 +243,8 @@ def list_github_release_versions(package_name):
         # Parse, Match Assets, Sort, and Display Versions
         available_versions = []
         for release in releases_list:
-            tag = release.get('tag_name')
-            if not tag or release.get('prerelease'):
+            tag = release.get("tag_name")
+            if not tag or release.get("prerelease"):
                 continue
 
             try:
@@ -237,8 +254,11 @@ def list_github_release_versions(package_name):
                 expected_asset_debug = f"{package_name}-{os_type}-{os_version}-{architecture}-debug-{tag}.zip"
 
                 # Check if any asset in this release matches our expected filename
-                for asset in release.get('assets', []):
-                    if asset['name'] == expected_asset_release or asset['name'] == expected_asset_debug:
+                for asset in release.get("assets", []):
+                    if (
+                        asset["name"] == expected_asset_release
+                        or asset["name"] == expected_asset_debug
+                    ):
                         available_versions.append(version_obj)
                         break  # Found a valid asset, no need to check others in this release
             except InvalidVersion:
@@ -257,7 +277,9 @@ def list_github_release_versions(package_name):
 
     except requests.exceptions.HTTPError as e:
         if e.response.status_code == 404:
-            print(f"❌ Error: Repository '{owner}/{repo_name}' not found on GitHub or you lack permissions.")
+            print(
+                f"❌ Error: Repository '{owner}/{repo_name}' not found on GitHub or you lack permissions."
+            )
         else:
             print(f"❌ HTTP Error fetching release data: {e}")
     except requests.exceptions.RequestException as e:
@@ -274,8 +296,7 @@ def index_local_command():
     script_directory = g.script_directory
 
     targets_to_process = find_target_yamls(
-        Path(script_directory) / 'src',
-        Path(script_directory) / 'release' / 'install'
+        Path(script_directory) / "src", Path(script_directory) / "release" / "install"
     )
 
     if not targets_to_process:
@@ -308,7 +329,10 @@ def index_local_command():
 # Helper Functions for index local
 # ============================================================================
 
-def find_target_yamls(priority_dir: Path, fallback_dir: Path) -> List[Tuple[str, Path, str]]:
+
+def find_target_yamls(
+    priority_dir: Path, fallback_dir: Path
+) -> List[Tuple[str, Path, str]]:
     """
     Scans directories for 'release.yaml' files, tagging their origin.
 
@@ -344,8 +368,20 @@ def find_target_yamls(priority_dir: Path, fallback_dir: Path) -> List[Tuple[str,
                     os_version = g.os_version
                     architecture = g.architecture
 
-                    yaml_file_release = item / os_type / os_version / architecture / "release/release.yaml"
-                    yaml_file_debug = item / os_type / os_version / architecture / "debug/release.yaml"
+                    yaml_file_release = (
+                        item
+                        / os_type
+                        / os_version
+                        / architecture
+                        / "release/release.yaml"
+                    )
+                    yaml_file_debug = (
+                        item
+                        / os_type
+                        / os_version
+                        / architecture
+                        / "debug/release.yaml"
+                    )
                     if yaml_file_release.is_file():
                         targets.append((pkg_name, yaml_file_release, "release"))
                     elif yaml_file_debug.is_file():
@@ -356,7 +392,9 @@ def find_target_yamls(priority_dir: Path, fallback_dir: Path) -> List[Tuple[str,
     return targets
 
 
-def parse_package_yaml(pkg_name: str, yaml_path: Path) -> Tuple[str, str, Optional[List[str]]]:
+def parse_package_yaml(
+    pkg_name: str, yaml_path: Path
+) -> Tuple[str, str, Optional[List[str]]]:
     """
     Worker function for Pass 1 (Parse).
     Parses a single YAML file and returns the RAW dependency list.
@@ -369,16 +407,16 @@ def parse_package_yaml(pkg_name: str, yaml_path: Path) -> Tuple[str, str, Option
         A tuple: (package_name, version_string, raw_deps_list_or_None)
     """
     try:
-        with open(yaml_path, 'r', encoding='utf-8') as f:
+        with open(yaml_path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f)
 
         if not isinstance(data, dict):
             return (pkg_name, "ERROR", ["Invalid or empty YAML"])
 
-        version = str(data.get('version', 'N/A'))
+        version = str(data.get("version", "N/A"))
 
         # Get the raw list of dependencies (or None)
-        deps_list: Optional[List[str]] = data.get('dependencies')
+        deps_list: Optional[List[str]] = data.get("dependencies")
 
         return (pkg_name, version, deps_list)
 
@@ -388,7 +426,9 @@ def parse_package_yaml(pkg_name: str, yaml_path: Path) -> Tuple[str, str, Option
         return (pkg_name, "ERROR", [f"File Read Error: {e}"])
 
 
-def run_parallel_parse(targets: List[Tuple[str, Path, str]]) -> List[Tuple[str, str, Optional[List[str]], str]]:
+def run_parallel_parse(
+    targets: List[Tuple[str, Path, str]],
+) -> List[Tuple[str, str, Optional[List[str]], str]]:
     """
     Manages the first thread pool (Pass 1) to parse all files.
 
@@ -402,7 +442,10 @@ def run_parallel_parse(targets: List[Tuple[str, Path, str]]) -> List[Tuple[str, 
 
     with concurrent.futures.ThreadPoolExecutor() as executor:
         futures_map = {
-            executor.submit(parse_package_yaml, pkg_name, yaml_path): (pkg_name, origin_tag)
+            executor.submit(parse_package_yaml, pkg_name, yaml_path): (
+                pkg_name,
+                origin_tag,
+            )
             for pkg_name, yaml_path, origin_tag in targets
         }
 
@@ -414,17 +457,19 @@ def run_parallel_parse(targets: List[Tuple[str, Path, str]]) -> List[Tuple[str, 
                 all_parse_results.append(parser_result + (origin,))
             except Exception as e:
                 print(f"Critical error processing package {pkg_name_for_error}: {e}")
-                all_parse_results.append((pkg_name_for_error, "CRITICAL ERROR", [str(e)], origin))
+                all_parse_results.append(
+                    (pkg_name_for_error, "CRITICAL ERROR", [str(e)], origin)
+                )
 
     return all_parse_results
 
 
 def process_and_color_deps(
-        pkg_name: str,
-        version: str,
-        deps_list: Optional[List[str]],
-        origin: str,
-        package_db: Dict[str, str]
+    pkg_name: str,
+    version: str,
+    deps_list: Optional[List[str]],
+    origin: str,
+    package_db: Dict[str, str],
 ) -> Tuple[str, str, str, str]:
     """
     Worker function for Pass 2 (Validate).
@@ -444,7 +489,9 @@ def process_and_color_deps(
     # If this package itself failed parsing (Pass 1), its version is "ERROR"
     # and its "deps_list" is actually the error message. Color it all red.
     if version == "ERROR":
-        deps_str = f"{Colors.RED}{', '.join(deps_list or ['Unknown Error'])}{Colors.RESET}"
+        deps_str = (
+            f"{Colors.RED}{', '.join(deps_list or ['Unknown Error'])}{Colors.RESET}"
+        )
         return (pkg_name, version, deps_str, origin)
 
     # If parsing was successful but there are no dependencies, return "None"
@@ -461,12 +508,16 @@ def process_and_color_deps(
 
         except (InvalidSpecifier, Exception):
             # Handle malformed requirement strings like "pkg_b>>>1"
-            colored_deps.append(f"{Colors.RED}{dep_spec_string} (Invalid Spec){Colors.RESET}")
+            colored_deps.append(
+                f"{Colors.RED}{dep_spec_string} (Invalid Spec){Colors.RESET}"
+            )
             continue
 
         # 1. Check if the dependency EXISTS in our database
         if req.name not in package_db:
-            colored_deps.append(f"{Colors.RED}{dep_spec_string} (Missing){Colors.RESET}")
+            colored_deps.append(
+                f"{Colors.RED}{dep_spec_string} (Missing){Colors.RESET}"
+            )
             continue
 
         # 2. If it exists, check if the found version MATCHES the specifier
@@ -482,15 +533,21 @@ def process_and_color_deps(
                 colored_deps.append(f"{Colors.GREEN}{dep_spec_string}{Colors.RESET}")
             else:
                 # Found, but version is wrong (e.g., we require >=1.0 but found 0.9)
-                colored_deps.append(f"{Colors.RED}{dep_spec_string} (Wrong Version){Colors.RESET}")
+                colored_deps.append(
+                    f"{Colors.RED}{dep_spec_string} (Wrong Version){Colors.RESET}"
+                )
 
         except InvalidVersion:
             # The dependency we found has an invalid version (e.g., "N/A" or "ERROR")
             # It cannot satisfy any version requirement.
-            colored_deps.append(f"{Colors.RED}{dep_spec_string} (Dep has Invalid Ver: {actual_version_str}){Colors.RESET}")
+            colored_deps.append(
+                f"{Colors.RED}{dep_spec_string} (Dep has Invalid Ver: {actual_version_str}){Colors.RESET}"
+            )
         except Exception as e:
             # Catch-all for other unexpected validation errors
-            colored_deps.append(f"{Colors.RED}{dep_spec_string} (Check Error: {e}){Colors.RESET}")
+            colored_deps.append(
+                f"{Colors.RED}{dep_spec_string} (Check Error: {e}){Colors.RESET}"
+            )
 
     # Join all the individually colored strings with a comma
     final_deps_str = ", ".join(colored_deps)
@@ -498,8 +555,8 @@ def process_and_color_deps(
 
 
 def run_parallel_validation(
-        all_pkg_data: List[Tuple[str, str, Optional[List[str]], str]],
-        package_db: Dict[str, str]
+    all_pkg_data: List[Tuple[str, str, Optional[List[str]], str]],
+    package_db: Dict[str, str],
 ) -> List[Tuple[str, str, str, str]]:
     """
     Manages the second thread pool (Pass 2) to validate all dependencies.
@@ -514,7 +571,9 @@ def run_parallel_validation(
     final_print_data = []
     with concurrent.futures.ThreadPoolExecutor() as executor:
         futures_map = {
-            executor.submit(process_and_color_deps, name, ver, deps, origin, package_db): name
+            executor.submit(
+                process_and_color_deps, name, ver, deps, origin, package_db
+            ): name
             for name, ver, deps, origin in all_pkg_data
         }
 
@@ -570,13 +629,60 @@ def print_aligned_results(results: List[Tuple[str, str, str, str]]):
             tag = "(release)"
 
         # Replace the raw tag with the colored one to preserve alignment
-        colored_name = padded_raw_name.replace(
-            tag,
-            f"{color}{tag}{Colors.RESET}"
-        )
+        colored_name = padded_raw_name.replace(tag, f"{color}{tag}{Colors.RESET}")
 
         padded_ver = f"{ver:<{max_ver_len}}"
 
         # Print the final line. The dependency string is the last column,
         # so its variable visual length (due to color codes) is fine.
-        print(f"{colored_name} , version: {padded_ver} , dependencies: {colored_deps_str}")
+        print(
+            f"{colored_name} , version: {padded_ver} , dependencies: {colored_deps_str}"
+        )
+
+
+# ============================================================================
+# Click CLI Commands
+# ============================================================================
+
+
+@click.group()
+def index_group():
+    """
+    List available packages (local or remote).
+
+    \b
+    Examples:
+        raisin index local                   # List local packages
+        raisin index release                 # List all remote packages
+        raisin index release raisin_network  # List versions of a package
+    """
+    pass
+
+
+@index_group.command("release")
+@click.argument("package", required=False)
+def index_release_cli(package):
+    """
+    List packages available on GitHub releases.
+
+    \b
+    Examples:
+        raisin index release                 # List all packages
+        raisin index release raisin_network  # Show versions of package
+    """
+    if package:
+        index_release_command(package)
+    else:
+        index_release_command()
+
+
+@index_group.command("local")
+def index_local_cli():
+    """
+    List packages built locally with dependency validation.
+
+    \b
+    Examples:
+        raisin index local                   # Show all local packages
+    """
+    index_local_command()

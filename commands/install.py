@@ -6,6 +6,7 @@ Downloads and installs packages from GitHub releases with dependency resolution.
 
 import re
 import shutil
+import click
 from pathlib import Path
 import requests
 import zipfile
@@ -49,7 +50,7 @@ def install_command(targets, build_type):
     # Process installation queue
     install_queue = list(targets)
 
-    src_dir = script_dir_path / 'src'
+    src_dir = script_dir_path / "src"
     if src_dir.is_dir():
         print(f"🔍 Scanning for local source packages in '{src_dir}'...")
         local_src_packages = [path.name for path in src_dir.iterdir() if path.is_dir()]
@@ -64,9 +65,11 @@ def install_command(targets, build_type):
     while install_queue:
         target_spec = install_queue.pop(0)
 
-        match = re.match(r'^\s*([a-zA-Z0-9_.-]+)\s*(.*)\s*$', target_spec)
+        match = re.match(r"^\s*([a-zA-Z0-9_.-]+)\s*(.*)\s*$", target_spec)
         if not match:
-            print(f"⚠️ Warning: Could not parse target specifier '{target_spec}'. Skipping.")
+            print(
+                f"⚠️ Warning: Could not parse target specifier '{target_spec}'. Skipping."
+            )
             continue
 
         package_name, spec_str = match.groups()
@@ -76,12 +79,14 @@ def install_command(targets, build_type):
             if not spec_str:
                 spec = SpecifierSet(">=0.0.0")
             else:
-                specifiers_list = re.findall(r'[<>=!~]+[\d.]+', spec_str)
-                formatted_spec_str = ', '.join(specifiers_list)
+                specifiers_list = re.findall(r"[<>=!~]+[\d.]+", spec_str)
+                formatted_spec_str = ", ".join(specifiers_list)
                 formatted_spec_str = formatted_spec_str.replace(">, =", ">=")
                 spec = SpecifierSet(formatted_spec_str)
         except Exception as e:
-            print(f"❌ Error: Invalid version specifier '{spec_str}' for package '{package_name}'. Skipping. Error: {e}")
+            print(
+                f"❌ Error: Invalid version specifier '{spec_str}' for package '{package_name}'. Skipping. Error: {e}"
+            )
             is_successful = False
             continue
 
@@ -91,15 +96,15 @@ def install_command(targets, build_type):
                 return False
             is_valid = False
             dependencies = []
-            release_yaml_path = path / 'release.yaml'
+            release_yaml_path = path / "release.yaml"
             if not release_yaml_path.is_file():
                 if not spec_str:
                     is_valid = True
             else:
-                with open(release_yaml_path, 'r') as f:
+                with open(release_yaml_path, "r") as f:
                     release_info = yaml.safe_load(f) or {}
-                    version_str = release_info.get('version')
-                    dependencies = release_info.get('dependencies', [])
+                    version_str = release_info.get("version")
+                    dependencies = release_info.get("dependencies", [])
                     if not version_str:
                         if not spec_str:
                             is_valid = True
@@ -109,7 +114,9 @@ def install_command(targets, build_type):
                             if spec.contains(version_obj):
                                 is_valid = True
                         except InvalidVersion:
-                            print(f"⚠️ Invalid version '{version_str}' in {package_type} release.yaml. Ignoring.")
+                            print(
+                                f"⚠️ Invalid version '{version_str}' in {package_type} release.yaml. Ignoring."
+                            )
             if is_valid:
                 if dependencies:
                     install_queue.extend(dependencies)
@@ -117,13 +124,20 @@ def install_command(targets, build_type):
             return False
 
         # Priority 1: Check precompiled
-        precompiled_path = (script_dir_path / 'release/install' / package_name / os_type / os_version
-                            / architecture / build_type)
+        precompiled_path = (
+            script_dir_path
+            / "release/install"
+            / package_name
+            / os_type
+            / os_version
+            / architecture
+            / build_type
+        )
         if check_local_package(precompiled_path, "release/install"):
             continue
 
         # Priority 2: Check local source
-        local_src_path = script_dir_path / 'src' / package_name
+        local_src_path = script_dir_path / "src" / package_name
         if check_local_package(local_src_path, "local source"):
             continue
         if local_src_path.is_dir():
@@ -132,24 +146,29 @@ def install_command(targets, build_type):
 
         # Priority 3: Find and install remote release
         repo_info = all_repositories.get(package_name)
-        if not repo_info or 'url' not in repo_info:
+        if not repo_info or "url" not in repo_info:
             print(f"⚠️ Warning: No repository URL found for '{package_name}'. Skipping.")
             continue
 
-        git_url = repo_info['url']
-        match = re.search(r'git@github.com:(.*)/(.*)\.git', git_url)
+        git_url = repo_info["url"]
+        match = re.search(r"git@github.com:(.*)/(.*)\.git", git_url)
         if not match:
             print(f"❌ Error: Could not parse GitHub owner/repo from URL '{git_url}'.")
             is_successful = False
             continue
 
         owner, repo_name = match.groups()
-        token = tokens.get(owner, tokens.get('default'))
+        token = tokens.get(owner, tokens.get("default"))
         if token:
-            session.headers.update({'Authorization': f'token {token}', 'Accept': 'application/vnd.github.v3+json'})
+            session.headers.update(
+                {
+                    "Authorization": f"token {token}",
+                    "Accept": "application/vnd.github.v3+json",
+                }
+            )
         else:  # Clear auth header if no token for this owner
-            if 'Authorization' in session.headers:
-                del session.headers['Authorization']
+            if "Authorization" in session.headers:
+                del session.headers["Authorization"]
 
         try:
             api_url = f"https://api.github.com/repos/{owner}/{repo_name}/releases"
@@ -161,39 +180,61 @@ def install_command(targets, build_type):
             best_version = parse_version("0.0.0")
 
             for release in releases_list:
-                tag = release.get('tag_name')
-                if not tag or (release.get('prerelease') and user_type != "devel"):
+                tag = release.get("tag_name")
+                if not tag or (release.get("prerelease") and user_type != "devel"):
                     continue
                 try:
                     current_version = parse_version(tag)
-                    if spec.contains(current_version) and current_version >= best_version:
+                    if (
+                        spec.contains(current_version)
+                        and current_version >= best_version
+                    ):
                         best_version = current_version
                         best_release = release
                 except InvalidVersion:
                     continue
 
             if not best_release:
-                print(f"❌ Error: No release found for '{package_name}' that satisfies spec '{spec}'.")
+                print(
+                    f"❌ Error: No release found for '{package_name}' that satisfies spec '{spec}'."
+                )
                 is_successful = False
                 continue
 
             release_data = best_release
-            version = release_data['tag_name']
+            version = release_data["tag_name"]
 
             if (package_name, version) in processed_packages:
                 continue
             processed_packages.add((package_name, version))
 
             asset_name = f"{package_name}-{os_type}-{os_version}-{architecture}-{build_type}-{version}.zip"
-            asset_api_url = next((asset['url'] for asset in release_data.get('assets', []) if asset['name'] == asset_name), None)
+            asset_api_url = next(
+                (
+                    asset["url"]
+                    for asset in release_data.get("assets", [])
+                    if asset["name"] == asset_name
+                ),
+                None,
+            )
 
             if not asset_api_url:
-                print(f"❌ Error: Could not find asset '{asset_name}' for release '{version}'.")
+                print(
+                    f"❌ Error: Could not find asset '{asset_name}' for release '{version}'."
+                )
                 is_successful = False
                 continue
 
-            install_dir = script_dir_path / 'release/install' / package_name / os_type / os_version / architecture / build_type
-            download_path = Path(script_directory) / 'install' / asset_name
+            install_dir = (
+                script_dir_path
+                / "release/install"
+                / package_name
+                / os_type
+                / os_version
+                / architecture
+                / build_type
+            )
+            download_path = Path(script_directory) / "install" / asset_name
             download_path.parent.mkdir(parents=True, exist_ok=True)
             if install_dir.exists():
                 shutil.rmtree(install_dir)
@@ -201,28 +242,28 @@ def install_command(targets, build_type):
 
             print("-" * 40)
             print(f"⬇️  Downloading {asset_name}...")
-            download_headers = {'Accept': 'application/octet-stream'}
+            download_headers = {"Accept": "application/octet-stream"}
             if token:
-                download_headers['Authorization'] = f'token {token}'
+                download_headers["Authorization"] = f"token {token}"
 
             with session.get(asset_api_url, headers=download_headers, stream=True) as r:
                 r.raise_for_status()
-                with open(download_path, 'wb') as f:
+                with open(download_path, "wb") as f:
                     for chunk in r.iter_content(chunk_size=8192):
                         f.write(chunk)
 
             print(f"📂 Unzipping to {install_dir}...")
-            with zipfile.ZipFile(download_path, 'r') as zip_ref:
+            with zipfile.ZipFile(download_path, "r") as zip_ref:
                 zip_ref.extractall(install_dir)
             download_path.unlink()
             print(f"✅ Successfully installed '{package_name}=={version}'.")
             print("-" * 40)
 
-            release_yaml_path = install_dir / 'release.yaml'
+            release_yaml_path = install_dir / "release.yaml"
             if release_yaml_path.is_file():
-                with open(release_yaml_path, 'r') as f:
+                with open(release_yaml_path, "r") as f:
                     release_info = yaml.safe_load(f)
-                    dependencies = release_info.get('dependencies', [])
+                    dependencies = release_info.get("dependencies", [])
                     if dependencies:
                         install_queue.extend(dependencies)
 
@@ -234,3 +275,38 @@ def install_command(targets, build_type):
         print("🎉🎉🎉 Installation process finished successfully.")
     else:
         print("❌ Installation process finished with errors.")
+
+
+# ============================================================================
+# Click CLI Command
+# ============================================================================
+
+
+@click.command()
+@click.argument("packages", nargs=-1, required=False)
+@click.option(
+    "--type",
+    "-t",
+    "build_type",
+    type=click.Choice(["debug", "release"], case_sensitive=False),
+    default="release",
+    show_default=True,
+    help="Build type to install",
+)
+def install_cli_command(packages, build_type):
+    """
+    Download and install packages from GitHub releases.
+
+    \b
+    Examples:
+        raisin install                               # Install all packages from src/
+        raisin install raisin_network                # Install release version
+        raisin install raisin_network --type debug   # Install debug version
+        raisin install pkg1 pkg2 pkg3                # Install multiple packages
+    """
+    packages = list(packages)
+    if packages:
+        click.echo(f"📥 Installing {len(packages)} package(s) ({build_type})...")
+    else:
+        click.echo(f"📥 Installing all packages from src/ ({build_type})...")
+    install_command(packages, build_type)

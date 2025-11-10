@@ -24,13 +24,13 @@ def load_configuration():
         tuple: (all_repositories, tokens, user_type, packages_to_ignore)
     """
     script_dir_path = Path(g.script_directory)
-    config_path = script_dir_path / 'configuration_setting.yaml'
+    config_path = script_dir_path / "configuration_setting.yaml"
 
     # Load repositories from repositories.yaml
     all_repositories = {}
-    repo_path = script_dir_path / 'repositories.yaml'
+    repo_path = script_dir_path / "repositories.yaml"
     if repo_path.is_file():
-        with open(repo_path, 'r') as f:
+        with open(repo_path, "r") as f:
             repo_data = yaml.safe_load(f)
             if repo_data:
                 all_repositories = repo_data
@@ -40,18 +40,18 @@ def load_configuration():
     packages_to_ignore = []
 
     if config_path.is_file():
-        with open(config_path, 'r') as f:
+        with open(config_path, "r") as f:
             config = yaml.safe_load(f)
-            tokens = config.get('gh_tokens', {})
-            user_type = config.get('user_type')
-            packages_to_ignore = config.get('packages_to_ignore', [])
+            tokens = config.get("gh_tokens", {})
+            user_type = config.get("user_type")
+            packages_to_ignore = config.get("packages_to_ignore", [])
     else:
-        secrets_path = script_dir_path / 'secrets.yaml'
+        secrets_path = script_dir_path / "secrets.yaml"
         if secrets_path.is_file():
-            with open(secrets_path, 'r') as f:
+            with open(secrets_path, "r") as f:
                 secrets = yaml.safe_load(f)
-                tokens = secrets.get('gh_tokens', {})
-                user_type = secrets.get('user_type')
+                tokens = secrets.get("gh_tokens", {})
+                user_type = secrets.get("user_type")
 
     # Validate user_type
     if user_type is None:
@@ -59,9 +59,11 @@ def load_configuration():
         print("Please set 'user_type' to either 'user' or 'devel'")
         sys.exit(1)
 
-    if user_type not in ['user', 'devel']:
+    if user_type not in ["user", "devel"]:
         print(f"❌ Error: Invalid 'user_type' value: '{user_type}'")
-        print("'user_type' must be either 'user' or 'devel' in configuration_setting.yaml")
+        print(
+            "'user_type' must be either 'user' or 'devel' in configuration_setting.yaml"
+        )
         sys.exit(1)
 
     return all_repositories, tokens, user_type, packages_to_ignore
@@ -192,7 +194,9 @@ def get_os_info() -> Tuple[str, str, str, str, str, dict]:
         vs_path2, ninja_path2, developer_env2 = find_build_tools("amd64")
         os_type2 = "windows"
         try:
-            win = sys.getwindowsversion()  # (major, minor, build, platform, service_pack)
+            win = (
+                sys.getwindowsversion()
+            )  # (major, minor, build, platform, service_pack)
             # os_version2 = f"{win.major}.{win.minor}.{win.build}"
             os_version2 = "10or11"
         except Exception:
@@ -204,3 +208,42 @@ def get_os_info() -> Tuple[str, str, str, str, str, dict]:
         os_version2 = platform.release()
 
     return os_type2, arch, os_version2, vs_path2, ninja_path2, developer_env2
+
+
+def init_environment(script_file_path, yes_flag=False):
+    """
+    Initialize the environment and global state.
+
+    Args:
+        script_file_path: Path to the main script file
+        yes_flag: Auto-confirm all prompts if True
+
+    This function initializes all global variables and sets up the environment.
+    """
+    script_directory = Path(
+        os.path.dirname(os.path.realpath(script_file_path))
+    ).as_posix()
+    (
+        os_type,
+        architecture,
+        os_version,
+        visual_studio_path,
+        ninja_path,
+        developer_env,
+    ) = get_os_info()
+
+    # Initialize commands.globals for modular commands
+    g.init_globals(
+        script_directory=script_directory,
+        os_type=os_type,
+        architecture=architecture,
+        os_version=os_version,
+        ninja_path=ninja_path,
+        visual_studio_path=visual_studio_path,
+        developer_env=developer_env,
+        build_pattern=[],
+        vcpkg_dependencies=set(),
+        always_yes=yes_flag,
+    )
+
+    delete_directory(os.path.join(script_directory, "temp"))

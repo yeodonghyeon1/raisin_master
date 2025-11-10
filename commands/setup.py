@@ -13,6 +13,7 @@ import shutil
 import platform
 import subprocess
 import requests
+import click
 from pathlib import Path
 from collections import defaultdict
 from typing import List, Tuple, Dict, Any, Set, Optional
@@ -21,6 +22,82 @@ from typing import List, Tuple, Dict, Any, Set, Optional
 from commands import globals as g
 from commands.constants import Colors, TYPE_MAPPING, STRING_TYPES
 from commands.utils import load_configuration, delete_directory
+
+
+# ============================================================================
+# Click CLI Command
+# ============================================================================
+
+
+@click.command()
+@click.argument("targets", nargs=-1)
+def setup_command(targets):
+    """
+    Generate interface files (.msg, .srv, .action) and configure CMake.
+
+    \b
+    Examples:
+        raisin setup                        # Build all packages
+        raisin setup raisin_network         # Build specific package
+        raisin setup raibo_controller gui   # Build multiple packages
+    """
+    targets = list(targets)
+    process_build_targets(targets)
+
+    if not g.build_pattern:
+        click.echo("🛠️  building all patterns")
+    else:
+        click.echo(f"🛠️  building the following targets: {g.build_pattern}")
+
+    setup()
+
+
+def process_build_targets(targets):
+    """
+    Process build targets and update global build_pattern.
+
+    Args:
+        targets: List of target names or paths
+
+    This function parses RAISIN_BUILD_TARGETS.yaml files and updates g.build_pattern
+    based on the requested targets.
+    """
+    script_directory = g.script_directory
+
+    # Check if targets specify a directory path
+    if len(targets) > 1 and (Path(script_directory) / "src" / targets[0]).exists():
+        g.build_pattern = [
+            name
+            for name in os.listdir(Path(script_directory) / "src" / targets[0])
+            if os.path.isdir(
+                os.path.join(Path(script_directory) / "src" / targets[0], name)
+            )
+        ]
+    else:
+        all_build_maps = {}
+        yaml_search_path = os.path.join(
+            script_directory, "src", "**", "RAISIN_BUILD_TARGETS.yaml"
+        )
+
+        for filepath in glob.glob(yaml_search_path, recursive=True):
+            with open(filepath, "r") as f:
+                try:
+                    yaml_content = yaml.safe_load(f)
+                    if yaml_content:
+                        all_build_maps.update(yaml_content)
+                except yaml.YAMLError as e:
+                    click.echo(
+                        f"Warning: Could not parse YAML file {filepath}. Error: {e}",
+                        err=True,
+                    )
+
+        # Collect build patterns based on the input targets
+        found_patterns = []
+        for target in targets:
+            patterns_for_target = all_build_maps.get(target, [])
+            found_patterns.extend(patterns_for_target)
+
+        g.build_pattern = found_patterns
 
 
 def create_service_file(srv_file, project_directory, install_dir):
@@ -32,38 +109,40 @@ def create_service_file(srv_file, project_directory, install_dir):
     :param project_directory: Path to the project directory
     :param install_dir: Installation directory
     """
-    template_path = os.path.join(g.script_directory, 'templates', 'ServiceTemplate.hpp')
+    template_path = os.path.join(g.script_directory, "templates", "ServiceTemplate.hpp")
 
     # Extract the project name from the project directory path
     project_name = os.path.basename(project_directory)
 
     # Determine the target directory in include/<project_name>/srv
-    include_project_srv_dir = os.path.join(g.script_directory, 'generated', 'include', project_name, 'srv')
+    include_project_srv_dir = os.path.join(
+        g.script_directory, "generated", "include", project_name, "srv"
+    )
 
     # Recreate the directory to ensure it's clean
     os.makedirs(include_project_srv_dir, exist_ok=True)
 
-    destination_file = os.path.join(install_dir, 'messages', project_name, 'srv', '')
+    destination_file = os.path.join(install_dir, "messages", project_name, "srv", "")
     os.makedirs(destination_file, exist_ok=True)
     shutil.copy2(srv_file, destination_file)
 
     # Read the template
-    with open(template_path, 'r') as template_file:
+    with open(template_path, "r") as template_file:
         template_content = template_file.read()
 
     # Extract service name from the file
-    service_name = os.path.basename(srv_file).replace('.srv', '')
+    service_name = os.path.basename(srv_file).replace(".srv", "")
 
     # Read the service file and split it into request and response parts
-    with open(srv_file, 'r') as srv_file_content:
+    with open(srv_file, "r") as srv_file_content:
         srv_content = srv_file_content.read()
 
-    with open(srv_file, 'r') as srv_file_content:
+    with open(srv_file, "r") as srv_file_content:
         lines = srv_file_content.readlines()
 
     # Split the content into request and response sections
-    if '---' in srv_content:
-        request_content, response_content = srv_content.split('---', 1)
+    if "---" in srv_content:
+        request_content, response_content = srv_content.split("---", 1)
     else:
         # If no '---' line is found, it's not a valid service file.
         print(f"Invalid service file format: {srv_file}")
@@ -75,10 +154,10 @@ def create_service_file(srv_file, project_directory, install_dir):
         line = line.strip()
 
         # Ignore comments by splitting at '#' and taking the part before it
-        line = line.split('#', 1)[0].strip()
+        line = line.split("#", 1)[0].strip()
 
         # Skip empty lines
-        if not line or line[0] == '-':
+        if not line or line[0] == "-":
             continue
 
         parts = line.split()
@@ -86,29 +165,47 @@ def create_service_file(srv_file, project_directory, install_dir):
             data_type, data_name = parts
 
             # Transform the data type for arrays
-            transformed_type, base_type, subproject_path, found_type = transform_data_type(data_type, project_name)
+            transformed_type, base_type, subproject_path, found_type = (
+                transform_data_type(data_type, project_name)
+            )
 
             # Check if the type is a known message type (not a primitive)
-            if not found_type and transformed_type != 'Header':
+            if not found_type and transformed_type != "Header":
                 # Use the preferred include format with relative path
                 if not subproject_path:
                     subproject_path = project_name
 
-                snake_str = re.sub(r'(?<!^)(?=[A-Z][a-z]|(?<=[a-z])[A-Z]|(?<=[0-9])(?=[A-Z]))', '_', base_type).lower()
+                snake_str = re.sub(
+                    r"(?<!^)(?=[A-Z][a-z]|(?<=[a-z])[A-Z]|(?<=[0-9])(?=[A-Z]))",
+                    "_",
+                    base_type,
+                ).lower()
                 snake_str = snake_str.replace("__", "_")
-                includes.append(f"#include \"../../{subproject_path}/msg/{snake_str}.hpp\"")
-
+                includes.append(
+                    f'#include "../../{subproject_path}/msg/{snake_str}.hpp"'
+                )
 
     # Process the request and response contents
-    request_includes, request_members, request_buffer_members, request_buffer_size = process_service_content(request_content, project_name)
-    response_includes, response_members, response_buffer_members, response_buffer_size = process_service_content(response_content, project_name)
+    request_includes, request_members, request_buffer_members, request_buffer_size = (
+        process_service_content(request_content, project_name)
+    )
+    (
+        response_includes,
+        response_members,
+        response_buffer_members,
+        response_buffer_size,
+    ) = process_service_content(response_content, project_name)
 
     # Replace placeholders in the template
-    class_name = service_name.replace('_', '')
-    service_content = template_content.replace('@@SERVICE_NAME@@', class_name)
-    service_content = service_content.replace('@@INCLUDE_PATH@@', "\n".join(includes))
-    service_content = service_content.replace('@@REQUEST_INCLUDES@@', "\n".join(request_includes))
-    service_content = service_content.replace('@@REQUEST_MEMBERS@@', "\n  ".join(request_members))
+    class_name = service_name.replace("_", "")
+    service_content = template_content.replace("@@SERVICE_NAME@@", class_name)
+    service_content = service_content.replace("@@INCLUDE_PATH@@", "\n".join(includes))
+    service_content = service_content.replace(
+        "@@REQUEST_INCLUDES@@", "\n".join(request_includes)
+    )
+    service_content = service_content.replace(
+        "@@REQUEST_MEMBERS@@", "\n  ".join(request_members)
+    )
 
     request_set_buffer_member_string = ""
     request_get_buffer_member_string = ""
@@ -124,38 +221,75 @@ def create_service_file(srv_file, project_directory, install_dir):
 
     for bm in response_buffer_members:
         response_set_buffer_member_string += f"::raisin::setBuffer(buffer, {bm});\n"
-        response_get_buffer_member_string += f"temp = ::raisin::getBuffer(temp, {bm});\n"
+        response_get_buffer_member_string += (
+            f"temp = ::raisin::getBuffer(temp, {bm});\n"
+        )
         response_equal_buffer_member_string += f"&& this->{bm} == other.{bm} \n"
 
-    service_content = service_content.replace('@@REQUEST_SET_BUFFER_MEMBERS@@', request_set_buffer_member_string)
-    modified_request_set_buffer_member_string = "\n".join("buffer = " + line for line in request_set_buffer_member_string.splitlines())
-    service_content = service_content.replace('@@REQUEST_SET_BUFFER_MEMBERS2@@', modified_request_set_buffer_member_string)
-    service_content = service_content.replace('@@REQUEST_GET_BUFFER_MEMBERS@@', request_get_buffer_member_string)
-    service_content = service_content.replace('@@REQUEST_EQUAL_BUFFER_MEMBERS@@', request_equal_buffer_member_string)
-    service_content = service_content.replace('@@REQUEST_BUFFER_SIZE@@', "\n  ".join(request_buffer_size))
+    service_content = service_content.replace(
+        "@@REQUEST_SET_BUFFER_MEMBERS@@", request_set_buffer_member_string
+    )
+    modified_request_set_buffer_member_string = "\n".join(
+        "buffer = " + line for line in request_set_buffer_member_string.splitlines()
+    )
+    service_content = service_content.replace(
+        "@@REQUEST_SET_BUFFER_MEMBERS2@@", modified_request_set_buffer_member_string
+    )
+    service_content = service_content.replace(
+        "@@REQUEST_GET_BUFFER_MEMBERS@@", request_get_buffer_member_string
+    )
+    service_content = service_content.replace(
+        "@@REQUEST_EQUAL_BUFFER_MEMBERS@@", request_equal_buffer_member_string
+    )
+    service_content = service_content.replace(
+        "@@REQUEST_BUFFER_SIZE@@", "\n  ".join(request_buffer_size)
+    )
 
-    service_content = service_content.replace('@@RESPONSE_SET_BUFFER_MEMBERS@@', response_set_buffer_member_string)
-    modified_response_set_buffer_member_string = "\n".join("buffer = " + line for line in response_set_buffer_member_string.splitlines())
-    service_content = service_content.replace('@@RESPONSE_SET_BUFFER_MEMBERS2@@', modified_response_set_buffer_member_string)
-    service_content = service_content.replace('@@RESPONSE_GET_BUFFER_MEMBERS@@', response_get_buffer_member_string)
-    service_content = service_content.replace('@@RESPONSE_EQUAL_BUFFER_MEMBERS@@', response_equal_buffer_member_string)
-    service_content = service_content.replace('@@RESPONSE_BUFFER_SIZE@@', "\n  ".join(response_buffer_size))
+    service_content = service_content.replace(
+        "@@RESPONSE_SET_BUFFER_MEMBERS@@", response_set_buffer_member_string
+    )
+    modified_response_set_buffer_member_string = "\n".join(
+        "buffer = " + line for line in response_set_buffer_member_string.splitlines()
+    )
+    service_content = service_content.replace(
+        "@@RESPONSE_SET_BUFFER_MEMBERS2@@", modified_response_set_buffer_member_string
+    )
+    service_content = service_content.replace(
+        "@@RESPONSE_GET_BUFFER_MEMBERS@@", response_get_buffer_member_string
+    )
+    service_content = service_content.replace(
+        "@@RESPONSE_EQUAL_BUFFER_MEMBERS@@", response_equal_buffer_member_string
+    )
+    service_content = service_content.replace(
+        "@@RESPONSE_BUFFER_SIZE@@", "\n  ".join(response_buffer_size)
+    )
 
-    service_content = service_content.replace('@@RESPONSE_INCLUDES@@', "\n".join(response_includes))
-    service_content = service_content.replace('@@RESPONSE_MEMBERS@@', "\n  ".join(response_members))
+    service_content = service_content.replace(
+        "@@RESPONSE_INCLUDES@@", "\n".join(response_includes)
+    )
+    service_content = service_content.replace(
+        "@@RESPONSE_MEMBERS@@", "\n  ".join(response_members)
+    )
 
     buffer_member_string = ", ".join(response_buffer_members)
-    buffer_member_string = f", {buffer_member_string}" if response_buffer_members else buffer_member_string
-    service_content = service_content.replace('@@RESPONSE_BUFFER_MEMBERS@@', buffer_member_string)
-    service_content = service_content.replace('@@PROJECT_NAME@@', project_name)
+    buffer_member_string = (
+        f", {buffer_member_string}" if response_buffer_members else buffer_member_string
+    )
+    service_content = service_content.replace(
+        "@@RESPONSE_BUFFER_MEMBERS@@", buffer_member_string
+    )
+    service_content = service_content.replace("@@PROJECT_NAME@@", project_name)
 
     # Create the service file in the <g.script_directory>/include/<project_directory>/srv directory
-    snake_str = re.sub(r'(?<!^)(?=[A-Z][a-z]|(?<=[a-z])[A-Z]|(?<=[0-9])(?=[A-Z]))', '_', service_name).lower()
+    snake_str = re.sub(
+        r"(?<!^)(?=[A-Z][a-z]|(?<=[a-z])[A-Z]|(?<=[0-9])(?=[A-Z]))", "_", service_name
+    ).lower()
     snake_str = snake_str.replace("__", "_")
-    output_path = os.path.join(include_project_srv_dir, f'{snake_str}.hpp')
+    output_path = os.path.join(include_project_srv_dir, f"{snake_str}.hpp")
 
-    with open(output_path, 'w') as output_file:
+    with open(output_path, "w") as output_file:
         output_file.write(service_content)
+
 
 def process_service_content(content, project_name):
     """
@@ -171,31 +305,39 @@ def process_service_content(content, project_name):
         line = line.strip()
 
         # Ignore comments
-        line = line.split('#', 1)[0].strip()
+        line = line.split("#", 1)[0].strip()
 
         # Skip empty lines
         if not line:
             continue
 
         parts = line.split()
-        parts_in_two = line.split(' ', 1)
+        parts_in_two = line.split(" ", 1)
 
-        if len(parts) < 4 and '=' not in parts_in_two[1]:
-            initial_value = ''
+        if len(parts) < 4 and "=" not in parts_in_two[1]:
+            initial_value = ""
             if len(parts) == 3:
                 data_type, data_name, initial_value = parts
             else:
                 data_type, data_name = parts
 
             # Transform the data type for arrays
-            transformed_type, base_type, subproject_path, found_type = transform_data_type(data_type, project_name)
-            data_name = re.sub(r'(?<!^)(?=[A-Z][a-z]|(?<=[a-z])[A-Z]|(?<=[0-9])(?=[A-Z]))', '_', data_name).lower()
+            transformed_type, base_type, subproject_path, found_type = (
+                transform_data_type(data_type, project_name)
+            )
+            data_name = re.sub(
+                r"(?<!^)(?=[A-Z][a-z]|(?<=[a-z])[A-Z]|(?<=[0-9])(?=[A-Z]))",
+                "_",
+                data_name,
+            ).lower()
             data_name = data_name.replace("__", "_")
 
             # Check if the type is a known message type (not a primitive)
-            if not found_type and transformed_type != 'Header':
+            if not found_type and transformed_type != "Header":
                 # Use the preferred include format with relative path
-                includes.append(f"#include \"../../{subproject_path}/msg/{base_type}.hpp\"")
+                includes.append(
+                    f'#include "../../{subproject_path}/msg/{base_type}.hpp"'
+                )
 
             members.append(f"using _{data_name}_type = {transformed_type};")
             if len(parts) == 3:
@@ -205,26 +347,41 @@ def process_service_content(content, project_name):
 
             buffer_members.append(f"{data_name}")
 
-            if transformed_type.startswith('std::vector') or transformed_type.startswith('std::array'):
+            if transformed_type.startswith(
+                "std::vector"
+            ) or transformed_type.startswith("std::array"):
                 if base_type in STRING_TYPES:
-                    buffer_size.append(f"temp += sizeof(uint32_t); \n for (const auto& v : {data_name}) temp += sizeof(uint32_t) + v.size();\n")
+                    buffer_size.append(
+                        f"temp += sizeof(uint32_t); \n for (const auto& v : {data_name}) temp += sizeof(uint32_t) + v.size();\n"
+                    )
                 elif base_type in TYPE_MAPPING.values():
-                    buffer_size.append(f"temp += {data_name}.size() * sizeof({data_name});\n")
+                    buffer_size.append(
+                        f"temp += {data_name}.size() * sizeof({data_name});\n"
+                    )
                 else:
-                    buffer_size.append(f"for (const auto& v : {data_name}) temp += v.getSize();\n")
-            else :
+                    buffer_size.append(
+                        f"for (const auto& v : {data_name}) temp += v.getSize();\n"
+                    )
+            else:
                 if transformed_type in STRING_TYPES:
-                    buffer_size.append(f"temp += sizeof(uint32_t) + {data_name}.size();\n")
-                elif transformed_type in TYPE_MAPPING.values() and transformed_type != 'std::string' and transformed_type != 'std::u16string':
+                    buffer_size.append(
+                        f"temp += sizeof(uint32_t) + {data_name}.size();\n"
+                    )
+                elif (
+                    transformed_type in TYPE_MAPPING.values()
+                    and transformed_type != "std::string"
+                    and transformed_type != "std::u16string"
+                ):
                     buffer_size.append(f"temp += sizeof({data_name});\n")
                 else:
                     buffer_size.append(f"temp += {data_name}.getSize();\n")
 
-        elif '=' in line:
-            parts = line.split(' ', 1)
+        elif "=" in line:
+            parts = line.split(" ", 1)
             members.append(f"static constexpr {TYPE_MAPPING[parts[0]]} {parts[1]};")
 
     return includes, members, buffer_members, buffer_size
+
 
 def find_topic_directories(search_directories):
     """
@@ -241,13 +398,14 @@ def find_topic_directories(search_directories):
         search_path = os.path.join(g.script_directory, search_dir)
 
         for root, dirs, files in os.walk(search_path):
-            if 'msg' in dirs or 'srv' in dirs:
+            if "msg" in dirs or "srv" in dirs:
                 # Add the directory containing CMakeLists.txt to the list
                 topic_directories.append(root)
                 # Do not recurse into subdirectories (clear the dirs list)
                 dirs.clear()
 
     return topic_directories
+
 
 def find_project_directories(search_directories, install_dir, packages_to_ignore=None):
     """
@@ -273,7 +431,7 @@ def find_project_directories(search_directories, install_dir, packages_to_ignore
             if project_name in packages_to_ignore:
                 dirs.clear()
                 continue
-            if 'CMakeLists.txt' in files:
+            if "CMakeLists.txt" in files:
                 # Add the directory containing CMakeLists.txt to the list
                 project_directories.append(root)
                 # Do not recurse into subdirectories (clear the dirs list)
@@ -281,11 +439,16 @@ def find_project_directories(search_directories, install_dir, packages_to_ignore
 
     for project_directory in project_directories:
         # Directories to copy
-        directories_to_copy = ['resource', 'config', 'scripts']
+        directories_to_copy = ["resource", "config", "scripts"]
 
         for directory in directories_to_copy:
             # Construct the target directory path
-            target_directory = os.path.join(g.script_directory, install_dir, directory, os.path.basename(project_directory))
+            target_directory = os.path.join(
+                g.script_directory,
+                install_dir,
+                directory,
+                os.path.basename(project_directory),
+            )
 
             # Ensure the target directory exists, create it if not
             source_dir = os.path.join(project_directory, directory)
@@ -298,8 +461,9 @@ def find_project_directories(search_directories, install_dir, packages_to_ignore
 
                 # Copy the entire directory
                 shutil.copytree(source_dir, target_path, dirs_exist_ok=True)
-        
+
     return project_directories
+
 
 def find_interface_files(search_directories, interface_types, packages_to_ignore=None):
     """
@@ -320,11 +484,11 @@ def find_interface_files(search_directories, interface_types, packages_to_ignore
 
     # This dictionary maps an interface type (e.g., 'action') to its file extension
     # and the list where its found files will be stored.
-    interface_map = {interface: (f'.{interface}', []) for interface in interface_types}
+    interface_map = {interface: (f".{interface}", []) for interface in interface_types}
 
     for search_dir in search_directories:
         search_path = Path(g.script_directory) / search_dir
-        generated_dest_dir = Path(g.script_directory) / 'generated' / 'include'
+        generated_dest_dir = Path(g.script_directory) / "generated" / "include"
 
         if not os.path.isdir(search_path):
             continue
@@ -335,10 +499,11 @@ def find_interface_files(search_directories, interface_types, packages_to_ignore
                 dirs.clear()
                 continue
 
-            if (Path(root) / 'include').is_dir():
-                if (Path(root) / 'msg').is_dir() or (Path(root) / 'srv').is_dir():
-                    shutil.copytree(Path(root) / 'include',
-                                    generated_dest_dir, dirs_exist_ok=True)
+            if (Path(root) / "include").is_dir():
+                if (Path(root) / "msg").is_dir() or (Path(root) / "srv").is_dir():
+                    shutil.copytree(
+                        Path(root) / "include", generated_dest_dir, dirs_exist_ok=True
+                    )
 
             # The name of the directory we are currently in (e.g., 'msg', 'srv')
             current_dir_name = os.path.basename(root)
@@ -382,7 +547,7 @@ def build_dependency_graph(project_directories):
     # Iterate through each project directory
     for project_dir in project_directories:
         # Path to the CMakeLists.txt file for this project
-        cmake_file_path = os.path.join(project_dir, 'CMakeLists.txt')
+        cmake_file_path = os.path.join(project_dir, "CMakeLists.txt")
 
         # Find the project name (assumes the project name is the directory name or can be derived)
         project_name = os.path.basename(project_dir)
@@ -401,15 +566,22 @@ def build_dependency_graph(project_directories):
 def find_dependencies(cmake_file_path):
     dependencies = []
     try:
-        with open(cmake_file_path, 'r') as cmake_file:
+        with open(cmake_file_path, "r") as cmake_file:
             # Read the entire file as a single string to handle multi-line target_link_libraries
             cmake_content = cmake_file.read()
 
         # Define the regex pattern to match "raisin_find_package(SOMETHING)"
-        pattern = r'raisin_find_package\((.*?)\)'
+        pattern = r"raisin_find_package\((.*?)\)"
 
         # List of keywords to ignore (in capital letters)
-        ignored_keywords = {'REQUIRED', 'VERSION', 'CONFIG', 'COMPONENTS', 'QUIET', 'EXACT'}
+        ignored_keywords = {
+            "REQUIRED",
+            "VERSION",
+            "CONFIG",
+            "COMPONENTS",
+            "QUIET",
+            "EXACT",
+        }
 
         # Use re.findall() to find all matches for the pattern
         matches = re.findall(pattern, cmake_content)
@@ -419,7 +591,7 @@ def find_dependencies(cmake_file_path):
             if match not in ignored_keywords:
                 modified_match = match
                 for cmake_keyword in ignored_keywords:
-                    modified_match = (modified_match.replace(cmake_keyword, "").strip())
+                    modified_match = modified_match.replace(cmake_keyword, "").strip()
 
                 dependencies.append(modified_match)
 
@@ -431,6 +603,7 @@ def find_dependencies(cmake_file_path):
         print(f"An error occurred: {e}")
 
     return dependencies
+
 
 def move_key_before(dep, keys, key):
     """
@@ -501,7 +674,8 @@ def update_cmake_file(project_directories, cmake_dir):
     else:
         # Find initial projects matching the build patterns
         initial_matches = {
-            name for name in all_project_names
+            name
+            for name in all_project_names
             for pattern in g.build_pattern
             if fnmatch.fnmatch(name, pattern)
         }
@@ -524,7 +698,8 @@ def update_cmake_file(project_directories, cmake_dir):
     # 3. Create a new graph containing only the projects to be included
     filtered_graph = {
         project: [dep for dep in deps if dep in projects_to_include]
-        for project, deps in full_graph.items() if project in projects_to_include
+        for project, deps in full_graph.items()
+        if project in projects_to_include
     }
 
     # 4. Perform a topological sort on the filtered set of projects
@@ -533,8 +708,8 @@ def update_cmake_file(project_directories, cmake_dir):
         sorted_project_names = topological_sort(filtered_graph, sorted_project_names)
 
     # 5. Generate the CMakeLists.txt content from the sorted, filtered list
-    template_path = os.path.join(g.script_directory, 'templates', 'CMakeLists.txt')
-    with open(template_path, 'r') as template_file:
+    template_path = os.path.join(g.script_directory, "templates", "CMakeLists.txt")
+    with open(template_path, "r") as template_file:
         cmake_template_content = template_file.read()
 
     # Create a quick lookup from project name to its full directory path
@@ -545,77 +720,115 @@ def update_cmake_file(project_directories, cmake_dir):
         if project_name in project_dir_map:
             project_dir = project_dir_map[project_name]
             if (Path(project_dir) / "CMakeLists.txt").is_file():
-                project_dir = project_dir.replace('\\', '/')
+                project_dir = project_dir.replace("\\", "/")
                 subdirectory_lines.append(f"add_subdirectory({project_dir})")
 
-    cmake_content = cmake_template_content.replace('@@SUB_PROJECT@@', "\n".join(subdirectory_lines))
-    cmake_content = cmake_content.replace('@@SCRIPT_DIR@@', g.script_directory)
+    cmake_content = cmake_template_content.replace(
+        "@@SUB_PROJECT@@", "\n".join(subdirectory_lines)
+    )
+    cmake_content = cmake_content.replace("@@SCRIPT_DIR@@", g.script_directory)
 
-    cmake_file_path = os.path.join(g.script_directory, 'CMakeLists.txt')
+    cmake_file_path = os.path.join(g.script_directory, "CMakeLists.txt")
 
-    with open(cmake_file_path, 'w') as cmake_file:
+    with open(cmake_file_path, "w") as cmake_file:
         cmake_file.write(cmake_content)
 
-    print(f"📂 Generated CMakeLists.txt at {cmake_file_path} with {len(subdirectory_lines)} projects.")
+    print(
+        f"📂 Generated CMakeLists.txt at {cmake_file_path} with {len(subdirectory_lines)} projects."
+    )
+
 
 def transform_data_type(data_type, project_name):
     """
     Transform the data type based on whether it ends in [] or [N].
     """
     found_type = False
-    subproject_path = ''
+    subproject_path = ""
 
     # Split the data_type by '/' and take the last part
-    if '/' in data_type:
-        subproject_path, data_type = data_type.rsplit('/', 1)
+    if "/" in data_type:
+        subproject_path, data_type = data_type.rsplit("/", 1)
         if not data_type:
             data_type = subproject_path
-            subproject_path = ''
+            subproject_path = ""
 
-    stripped_data_type = data_type.split('<', 1)[0]
-    stripped_data_type = stripped_data_type.split('>', 1)[0]
+    stripped_data_type = data_type.split("<", 1)[0]
+    stripped_data_type = stripped_data_type.split(">", 1)[0]
 
     # Check for array types (with [] or [N])
-    if match := re.match(r'([a-zA-Z0-9_]+)\[(\d+)\]', data_type):
+    if match := re.match(r"([a-zA-Z0-9_]+)\[(\d+)\]", data_type):
         # Fixed-size array ([N])
         base_type, size = match.groups()
         if base_type in TYPE_MAPPING:
             converted_base_type = TYPE_MAPPING[base_type]
-            return f"std::array<{converted_base_type}, {size}>", converted_base_type, subproject_path, base_type in TYPE_MAPPING
+            return (
+                f"std::array<{converted_base_type}, {size}>",
+                converted_base_type,
+                subproject_path,
+                base_type in TYPE_MAPPING,
+            )
         elif not subproject_path:
-            return f"std::array<{project_name}::msg::{base_type}, {size}>", base_type, subproject_path, True
+            return (
+                f"std::array<{project_name}::msg::{base_type}, {size}>",
+                base_type,
+                subproject_path,
+                True,
+            )
         elif subproject_path:
-            return f"std::array<{subproject_path}::msg::{base_type}, {size}>", base_type, subproject_path, False
-    elif data_type.endswith(']'):
-        base_type = data_type.split('[', 1)[0]  # Remove the '[]'
+            return (
+                f"std::array<{subproject_path}::msg::{base_type}, {size}>",
+                base_type,
+                subproject_path,
+                False,
+            )
+    elif data_type.endswith("]"):
+        base_type = data_type.split("[", 1)[0]  # Remove the '[]'
         if base_type in TYPE_MAPPING:
             base_type = TYPE_MAPPING[base_type]
             found_type = True
             return f"std::vector<{base_type}>", base_type, subproject_path, found_type
         elif not subproject_path:
-            return f"std::vector<{project_name}::msg::{base_type}>", base_type, subproject_path, False
+            return (
+                f"std::vector<{project_name}::msg::{base_type}>",
+                base_type,
+                subproject_path,
+                False,
+            )
         elif subproject_path:
-            return f"std::vector<{subproject_path}::msg::{base_type}>", base_type, subproject_path, False
+            return (
+                f"std::vector<{subproject_path}::msg::{base_type}>",
+                base_type,
+                subproject_path,
+                False,
+            )
     elif stripped_data_type in TYPE_MAPPING:
-        return TYPE_MAPPING[stripped_data_type], TYPE_MAPPING[stripped_data_type], subproject_path, True
+        return (
+            TYPE_MAPPING[stripped_data_type],
+            TYPE_MAPPING[stripped_data_type],
+            subproject_path,
+            True,
+        )
     elif subproject_path:
         return f"{subproject_path}::msg::{data_type}", data_type, subproject_path, False
     else:
         return f"{project_name}::msg::{data_type}", data_type, subproject_path, False
+
 
 def create_action_file(action_file, project_directory, install_dir):
     """
     Create a message file based on the template, replacing '@@MESSAGE_NAME@@' with the message file name.
     The file is saved in <g.script_directory>/include/<project_directory>/msg.
     """
-    template_path = os.path.join(g.script_directory, 'templates', 'ActionTemplate.hpp')
+    template_path = os.path.join(g.script_directory, "templates", "ActionTemplate.hpp")
 
     # Extract the project name from the project directory path
     project_name = os.path.basename(project_directory)
 
     # Determine the target directory in include/<project_name>/msg
-    include_project_msg_dir = os.path.join(g.script_directory, 'generated', 'include', project_name, 'action')
-    destination_file = os.path.join(install_dir, 'messages', project_name, 'action', '')
+    include_project_msg_dir = os.path.join(
+        g.script_directory, "generated", "include", project_name, "action"
+    )
+    destination_file = os.path.join(install_dir, "messages", project_name, "action", "")
     os.makedirs(destination_file, exist_ok=True)
     shutil.copy2(action_file, destination_file)
 
@@ -623,22 +836,26 @@ def create_action_file(action_file, project_directory, install_dir):
     os.makedirs(include_project_msg_dir, exist_ok=True)  # Recreate it
 
     # Read the template
-    with open(template_path, 'r') as template_file:
+    with open(template_path, "r") as template_file:
         template_content = template_file.read()
 
     # Replace the placeholder with the message file name
-    message_name = str(os.path.basename(action_file).replace('.action', ''))
-    class_name = message_name.replace('_', '')
-    message_content = template_content.replace('@@LOWER_MESSAGE_NAME@@', class_name.lower())
-    message_content = message_content.replace('@@MESSAGE_NAME@@', class_name)
-    message_content = message_content.replace('@@PROJECT_NAME@@', project_name)
+    message_name = str(os.path.basename(action_file).replace(".action", ""))
+    class_name = message_name.replace("_", "")
+    message_content = template_content.replace(
+        "@@LOWER_MESSAGE_NAME@@", class_name.lower()
+    )
+    message_content = message_content.replace("@@MESSAGE_NAME@@", class_name)
+    message_content = message_content.replace("@@PROJECT_NAME@@", project_name)
 
     # Create the message file in the <g.script_directory>/include/<project_directory>/msg directory
-    snake_str = re.sub(r'(?<!^)(?=[A-Z][a-z]|(?<=[a-z])[A-Z]|(?<=[0-9])(?=[A-Z]))', '_', message_name).lower()
+    snake_str = re.sub(
+        r"(?<!^)(?=[A-Z][a-z]|(?<=[a-z])[A-Z]|(?<=[0-9])(?=[A-Z]))", "_", message_name
+    ).lower()
     snake_str = snake_str.replace("__", "_")
-    output_path = os.path.join(include_project_msg_dir, f'{snake_str}.hpp')
+    output_path = os.path.join(include_project_msg_dir, f"{snake_str}.hpp")
 
-    with open(output_path, 'w') as output_file:
+    with open(output_path, "w") as output_file:
         output_file.write(message_content)
 
     ### create other interface files
@@ -659,9 +876,11 @@ def create_action_file(action_file, project_directory, install_dir):
     srv_dir.mkdir(parents=True, exist_ok=True)
 
     # --- 3. Split the action file content ---
-    parts = action_file_content.split('---')
+    parts = action_file_content.split("---")
     if len(parts) != 3:
-        print(f"❌ ERROR: Invalid action file format of {action_file}. Must contain two '---' separators.")
+        print(
+            f"❌ ERROR: Invalid action file format of {action_file}. Must contain two '---' separators."
+        )
         return
 
     goal_content, result_content, feedback_content = [part.strip() for part in parts]
@@ -677,23 +896,28 @@ def create_action_file(action_file, project_directory, install_dir):
         file_path = msg_dir / filename
         file_path.write_text(content)
 
-    send_goal_content = (f"{class_name}Goal goal\n" +
-                         "unique_identifier_msgs/UUID goal_id\n" +
-                         "---\n" +
-                         "bool accepted\n" +
-                         "builtin_interfaces/Time stamp")
+    send_goal_content = (
+        f"{class_name}Goal goal\n"
+        + "unique_identifier_msgs/UUID goal_id\n"
+        + "---\n"
+        + "bool accepted\n"
+        + "builtin_interfaces/Time stamp"
+    )
     file_path = srv_dir / f"{class_name}SendGoal.srv"
     file_path.write_text(send_goal_content)
 
-    get_result_content = ("unique_identifier_msgs/UUID goal_id\n" +
-                          "---\n" +
-                          f"{class_name}Result result\n" +
-                          "uint8 status")
+    get_result_content = (
+        "unique_identifier_msgs/UUID goal_id\n"
+        + "---\n"
+        + f"{class_name}Result result\n"
+        + "uint8 status"
+    )
     file_path = srv_dir / f"{class_name}GetResult.srv"
     file_path.write_text(get_result_content)
 
-    feedback_message_content = (f"{class_name}Feedback feedback\n" +
-                                "unique_identifier_msgs/UUID goal_id")
+    feedback_message_content = (
+        f"{class_name}Feedback feedback\n" + "unique_identifier_msgs/UUID goal_id"
+    )
     file_path = msg_dir / f"{class_name}FeedbackMessage.msg"
     file_path.write_text(feedback_message_content)
 
@@ -703,14 +927,16 @@ def create_message_file(msg_file, project_directory, install_dir):
     Create a message file based on the template, replacing '@@MESSAGE_NAME@@' with the message file name.
     The file is saved in <g.script_directory>/include/<project_directory>/msg.
     """
-    template_path = os.path.join(g.script_directory, 'templates', 'MessageTemplate.hpp')
+    template_path = os.path.join(g.script_directory, "templates", "MessageTemplate.hpp")
 
     # Extract the project name from the project directory path
     project_name = os.path.basename(project_directory)
 
     # Determine the target directory in include/<project_name>/msg
-    include_project_msg_dir = os.path.join(g.script_directory, 'generated', 'include', project_name, 'msg')
-    destination_file = os.path.join(install_dir, 'messages', project_name, 'msg', '')
+    include_project_msg_dir = os.path.join(
+        g.script_directory, "generated", "include", project_name, "msg"
+    )
+    destination_file = os.path.join(install_dir, "messages", project_name, "msg", "")
     os.makedirs(destination_file, exist_ok=True)
     shutil.copy2(msg_file, destination_file)
 
@@ -718,17 +944,17 @@ def create_message_file(msg_file, project_directory, install_dir):
     os.makedirs(include_project_msg_dir, exist_ok=True)  # Recreate it
 
     # Read the template
-    with open(template_path, 'r') as template_file:
+    with open(template_path, "r") as template_file:
         template_content = template_file.read()
 
     # Replace the placeholder with the message file name
-    message_name = os.path.basename(msg_file).replace('.msg', '')
-    class_name = message_name.replace('_', '')
-    message_content = template_content.replace('@@MESSAGE_NAME@@', class_name)
-    message_content = message_content.replace('@@PROJECT_NAME@@', project_name)
+    message_name = os.path.basename(msg_file).replace(".msg", "")
+    class_name = message_name.replace("_", "")
+    message_content = template_content.replace("@@MESSAGE_NAME@@", class_name)
+    message_content = message_content.replace("@@PROJECT_NAME@@", project_name)
 
     # Read the message file and process its contents
-    with open(msg_file, 'r') as msg_file_content:
+    with open(msg_file, "r") as msg_file_content:
         lines = msg_file_content.readlines()
 
     includes = []
@@ -740,25 +966,31 @@ def create_message_file(msg_file, project_directory, install_dir):
         line = line.strip()
 
         # Ignore comments by splitting at '#' and taking the part before it
-        line = line.split('#', 1)[0].strip()
+        line = line.split("#", 1)[0].strip()
 
         # Skip empty lines
         if not line:
             continue
 
         parts = line.split()
-        parts_in_two = line.split(' ', 1)
+        parts_in_two = line.split(" ", 1)
 
-        if len(parts) < 4  and '=' not in parts_in_two[1]:
-            initial_value = ''
+        if len(parts) < 4 and "=" not in parts_in_two[1]:
+            initial_value = ""
             if len(parts) == 3:
                 data_type, data_name, initial_value = parts
             else:
                 data_type, data_name = parts
 
             # Transform the data type for arrays
-            transformed_type, base_type, subproject_path, found_type = transform_data_type(data_type, project_name)
-            data_name = re.sub(r'(?<!^)(?=[A-Z][a-z]|(?<=[a-z])[A-Z]|(?<=[0-9])(?=[A-Z]))', '_', data_name).lower()
+            transformed_type, base_type, subproject_path, found_type = (
+                transform_data_type(data_type, project_name)
+            )
+            data_name = re.sub(
+                r"(?<!^)(?=[A-Z][a-z]|(?<=[a-z])[A-Z]|(?<=[0-9])(?=[A-Z]))",
+                "_",
+                data_name,
+            ).lower()
             data_name = data_name.replace("__", "_")
 
             # Check if the type is a known message type (not a primitive)
@@ -767,12 +999,18 @@ def create_message_file(msg_file, project_directory, install_dir):
                 if not subproject_path:
                     subproject_path = project_name
 
-                if data_type != 'Header':
-                    snake_str = re.sub(r'(?<!^)(?=[A-Z][a-z]|(?<=[a-z])[A-Z]|(?<=[0-9])(?=[A-Z]))', '_', base_type).lower()
+                if data_type != "Header":
+                    snake_str = re.sub(
+                        r"(?<!^)(?=[A-Z][a-z]|(?<=[a-z])[A-Z]|(?<=[0-9])(?=[A-Z]))",
+                        "_",
+                        base_type,
+                    ).lower()
                     snake_str = snake_str.replace("__", "_")
-                    includes.append(f"#include \"../../{subproject_path}/msg/{snake_str}.hpp\"")
+                    includes.append(
+                        f'#include "../../{subproject_path}/msg/{snake_str}.hpp"'
+                    )
                 else:
-                    includes.append(f"#include \"../../std_msgs/msg/header.hpp\"")
+                    includes.append(f'#include "../../std_msgs/msg/header.hpp"')
 
             members.append(f"using _{data_name}_type = {transformed_type};")
             if len(parts) == 3:
@@ -781,29 +1019,45 @@ def create_message_file(msg_file, project_directory, install_dir):
                 members.append(f"{transformed_type} {data_name};")
             buffer_members.append(data_name)
 
-            if transformed_type.startswith('std::vector') or transformed_type.startswith('std::array'):
+            if transformed_type.startswith(
+                "std::vector"
+            ) or transformed_type.startswith("std::array"):
                 if base_type in STRING_TYPES:
-                    buffer_size.append(f"temp += sizeof(uint32_t); \n for (const auto& v : {data_name}) temp += sizeof(uint32_t) + v.size();")
+                    buffer_size.append(
+                        f"temp += sizeof(uint32_t); \n for (const auto& v : {data_name}) temp += sizeof(uint32_t) + v.size();"
+                    )
                 elif base_type in TYPE_MAPPING.values():
-                    buffer_size.append(f"temp += {data_name}.size() * sizeof({data_name});")
+                    buffer_size.append(
+                        f"temp += {data_name}.size() * sizeof({data_name});"
+                    )
                 else:
-                    buffer_size.append(f"for (const auto& v : {data_name}) temp += v.getSize();")
-            else :
+                    buffer_size.append(
+                        f"for (const auto& v : {data_name}) temp += v.getSize();"
+                    )
+            else:
                 if transformed_type in STRING_TYPES:
-                    buffer_size.append(f"temp += sizeof(uint32_t) + {data_name}.size();")
-                elif transformed_type in TYPE_MAPPING.values() and transformed_type != 'std::string' and transformed_type != 'std::u16string':
+                    buffer_size.append(
+                        f"temp += sizeof(uint32_t) + {data_name}.size();"
+                    )
+                elif (
+                    transformed_type in TYPE_MAPPING.values()
+                    and transformed_type != "std::string"
+                    and transformed_type != "std::u16string"
+                ):
                     buffer_size.append(f"temp += sizeof({data_name});")
                 else:
                     buffer_size.append(f"temp += {data_name}.getSize();")
 
-        elif '=' in line:
-            parts = line.split(' ', 1)
+        elif "=" in line:
+            parts = line.split(" ", 1)
             members.append(f"static constexpr {TYPE_MAPPING[parts[0]]} {parts[1]};")
 
     # Insert includes and members into the template
-    message_content = message_content.replace('@@INCLUDE_PATH@@', "\n".join(includes))
-    message_content = message_content.replace('@@MEMBERS@@', "\n  ".join(members))
-    message_content = message_content.replace('@@BUFFER_SIZE_EXPRESSION@@', "\n  ".join(buffer_size))
+    message_content = message_content.replace("@@INCLUDE_PATH@@", "\n".join(includes))
+    message_content = message_content.replace("@@MEMBERS@@", "\n  ".join(members))
+    message_content = message_content.replace(
+        "@@BUFFER_SIZE_EXPRESSION@@", "\n  ".join(buffer_size)
+    )
 
     set_buffer_member_string = ""
     get_buffer_member_string = ""
@@ -818,31 +1072,45 @@ def create_message_file(msg_file, project_directory, install_dir):
     for bm in buffer_members:
         equal_buffer_member_string += f"&& this->{bm} == other.{bm} \n"
 
-    message_content = message_content.replace('@@SET_BUFFER_MEMBERS@@', set_buffer_member_string)
-    modified_set_buffer_member_string = "\n".join("buffer = " + line for line in set_buffer_member_string.splitlines())
-    message_content = message_content.replace('@@SET_BUFFER_MEMBERS2@@', modified_set_buffer_member_string)
-    message_content = message_content.replace('@@GET_BUFFER_MEMBERS@@', get_buffer_member_string)
-    message_content = message_content.replace('@@EQUAL_BUFFER_MEMBERS@@', equal_buffer_member_string)
+    message_content = message_content.replace(
+        "@@SET_BUFFER_MEMBERS@@", set_buffer_member_string
+    )
+    modified_set_buffer_member_string = "\n".join(
+        "buffer = " + line for line in set_buffer_member_string.splitlines()
+    )
+    message_content = message_content.replace(
+        "@@SET_BUFFER_MEMBERS2@@", modified_set_buffer_member_string
+    )
+    message_content = message_content.replace(
+        "@@GET_BUFFER_MEMBERS@@", get_buffer_member_string
+    )
+    message_content = message_content.replace(
+        "@@EQUAL_BUFFER_MEMBERS@@", equal_buffer_member_string
+    )
 
     # Create the message file in the <g.script_directory>/include/<project_directory>/msg directory
-    snake_str = re.sub(r'(?<!^)(?=[A-Z][a-z]|(?<=[a-z])[A-Z]|(?<=[0-9])(?=[A-Z]))', '_', message_name).lower()
+    snake_str = re.sub(
+        r"(?<!^)(?=[A-Z][a-z]|(?<=[a-z])[A-Z]|(?<=[0-9])(?=[A-Z]))", "_", message_name
+    ).lower()
     snake_str = snake_str.replace("__", "_")
-    output_path = os.path.join(include_project_msg_dir, f'{snake_str}.hpp')
+    output_path = os.path.join(include_project_msg_dir, f"{snake_str}.hpp")
 
-    with open(output_path, 'w') as output_file:
+    with open(output_path, "w") as output_file:
         output_file.write(message_content)
 
     # print(f"Created message file: {output_path}")
 
+
 def get_ubuntu_version():
-    with open('/etc/os-release') as f:
+    with open("/etc/os-release") as f:
         for line in f:
-            if 'VERSION=' in line:
-                version = line.split('=')[1].strip().strip('"')
-                match = re.search(r'(\d+\.\d+)', version)
+            if "VERSION=" in line:
+                version = line.split("=")[1].strip().strip('"')
+                match = re.search(r"(\d+\.\d+)", version)
                 if match:
                     return match.group(1)
     return None
+
 
 def get_packages_to_ignore():
     """
@@ -865,10 +1133,10 @@ def get_packages_to_ignore():
         # Get the absolute path of the current script
         script_dir = os.path.dirname(os.path.abspath(__file__))
         # Construct the full path to 'RAISIN_IGNORE'
-        file_path = os.path.join(script_dir, 'RAISIN_IGNORE')
+        file_path = os.path.join(script_dir, "RAISIN_IGNORE")
 
         # Read the file and add its lines to the list
-        with open(file_path, 'r') as file:
+        with open(file_path, "r") as file:
             file_lines = [line.strip() for line in file.readlines()]
             ignore_packages.extend(file_lines)
 
@@ -880,6 +1148,7 @@ def get_packages_to_ignore():
     # Remove duplicates while preserving order
     return list(dict.fromkeys(ignore_packages))
 
+
 def find_git_repos(base_dir):
     """
     Recursively search for directories that contain a .git folder.
@@ -887,11 +1156,12 @@ def find_git_repos(base_dir):
     """
     git_repos = []
     for root, dirs, _ in os.walk(base_dir):
-        if '.git' in dirs:
+        if ".git" in dirs:
             git_repos.append(root)
             # Prevent descending into this repository's subdirectories.
             dirs.clear()
     return git_repos
+
 
 def install_development_tools():
     """
@@ -901,7 +1171,7 @@ def install_development_tools():
 
     # Check if clang-format is installed
     try:
-        subprocess.run(['clang-format', '--version'], capture_output=True, check=True)
+        subprocess.run(["clang-format", "--version"], capture_output=True, check=True)
         print("✅ clang-format is already installed")
     except (subprocess.CalledProcessError, FileNotFoundError):
         print("Installing clang-format...")
@@ -911,24 +1181,36 @@ def install_development_tools():
                 # Try apt first (Ubuntu/Debian)
                 try:
                     if is_root():
-                        subprocess.run(['apt', 'update'], check=True)
-                        subprocess.run(['apt', 'install', '-y', 'clang-format'], check=True)
+                        subprocess.run(["apt", "update"], check=True)
+                        subprocess.run(
+                            ["apt", "install", "-y", "clang-format"], check=True
+                        )
                     else:
-                        subprocess.run(['sudo', 'apt', 'update'], check=True)
-                        subprocess.run(['sudo', 'apt', 'install', '-y', 'clang-format'], check=True)
+                        subprocess.run(["sudo", "apt", "update"], check=True)
+                        subprocess.run(
+                            ["sudo", "apt", "install", "-y", "clang-format"], check=True
+                        )
                     print("✅ clang-format installed via apt")
                 except subprocess.CalledProcessError:
                     # Try snap as fallback
                     try:
                         if is_root():
-                            subprocess.run(['snap', 'install', 'clang-format'], check=True)
+                            subprocess.run(
+                                ["snap", "install", "clang-format"], check=True
+                            )
                         else:
-                            subprocess.run(['sudo', 'snap', 'install', 'clang-format'], check=True)
+                            subprocess.run(
+                                ["sudo", "snap", "install", "clang-format"], check=True
+                            )
                         print("✅ clang-format installed via snap")
                     except subprocess.CalledProcessError:
-                        print("❌ Failed to install clang-format. Please install manually.")
+                        print(
+                            "❌ Failed to install clang-format. Please install manually."
+                        )
             else:
-                print("❌ Automatic clang-format installation not supported on this platform. Please install manually.")
+                print(
+                    "❌ Automatic clang-format installation not supported on this platform. Please install manually."
+                )
         except Exception as e:
             print(f"❌ Error installing clang-format: {str(e)}")
 
@@ -937,7 +1219,12 @@ def install_development_tools():
 
     # Try system Python first (for git hooks)
     try:
-        result = subprocess.run(['/usr/bin/python3', '-m', 'pre_commit', '--version'], capture_output=True, text=True, timeout=5)
+        result = subprocess.run(
+            ["/usr/bin/python3", "-m", "pre_commit", "--version"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
         if result.returncode == 0 and result.stdout.strip():
             print("✅ pre-commit is already installed (system Python)")
             pre_commit_installed = True
@@ -947,7 +1234,9 @@ def install_development_tools():
     # Try direct command if system Python doesn't work
     if not pre_commit_installed:
         try:
-            result = subprocess.run(['pre-commit', '--version'], capture_output=True, text=True, timeout=5)
+            result = subprocess.run(
+                ["pre-commit", "--version"], capture_output=True, text=True, timeout=5
+            )
             if result.returncode == 0 and result.stdout.strip():
                 print("✅ pre-commit is already installed")
                 pre_commit_installed = True
@@ -957,7 +1246,12 @@ def install_development_tools():
     # Try current Python module if direct command failed
     if not pre_commit_installed:
         try:
-            result = subprocess.run([sys.executable, '-m', 'pre_commit', '--version'], capture_output=True, text=True, timeout=5)
+            result = subprocess.run(
+                [sys.executable, "-m", "pre_commit", "--version"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
             if result.returncode == 0 and result.stdout.strip():
                 print("✅ pre-commit is already installed (python module)")
                 pre_commit_installed = True
@@ -969,25 +1263,29 @@ def install_development_tools():
         try:
             # Try to install pre-commit to system Python first (for git hooks)
             # Check if current Python is already system Python3
-            commands = ['/usr/bin/python3', '-m', 'pip', 'install', 'pre-commit']
+            commands = ["/usr/bin/python3", "-m", "pip", "install", "pre-commit"]
             if not is_root():
-                commands.insert(0, 'sudo')
-            if sys.executable == '/usr/bin/python3':
-                commands.append('--break-system-packages')
+                commands.insert(0, "sudo")
+            if sys.executable == "/usr/bin/python3":
+                commands.append("--break-system-packages")
             subprocess.run(commands, check=True)
             print("✅ pre-commit installed to system Python via pip")
         except subprocess.CalledProcessError:
             try:
                 # Fallback to current Python environment
-                subprocess.run([sys.executable, '-m', 'pip', 'install', 'pre-commit'], check=True)
+                subprocess.run(
+                    [sys.executable, "-m", "pip", "install", "pre-commit"], check=True
+                )
                 print("✅ pre-commit installed via pip")
             except subprocess.CalledProcessError:
                 try:
                     # Try with pip3 as fallback
-                    subprocess.run(['pip3', 'install', 'pre-commit'], check=True)
+                    subprocess.run(["pip3", "install", "pre-commit"], check=True)
                     print("✅ pre-commit installed via pip3")
                 except subprocess.CalledProcessError:
-                    print("❌ Failed to install pre-commit. Please install manually: sudo /usr/bin/python3 -m pip install pre-commit")
+                    print(
+                        "❌ Failed to install pre-commit. Please install manually: sudo /usr/bin/python3 -m pip install pre-commit"
+                    )
 
 
 def get_commit_hash(repo_path):
@@ -996,14 +1294,20 @@ def get_commit_hash(repo_path):
     Uses the git command-line tool.
     """
     try:
-        commit_hash = subprocess.check_output(
-            ['git', '-C', repo_path, 'rev-parse', 'HEAD'],
-            stderr=subprocess.STDOUT
-        ).decode('utf-8').strip()
+        commit_hash = (
+            subprocess.check_output(
+                ["git", "-C", repo_path, "rev-parse", "HEAD"], stderr=subprocess.STDOUT
+            )
+            .decode("utf-8")
+            .strip()
+        )
         return commit_hash
     except subprocess.CalledProcessError as e:
-        print(f"❌ Error getting commit hash for {repo_path}:\n{e.output.decode('utf-8')}")
+        print(
+            f"❌ Error getting commit hash for {repo_path}:\n{e.output.decode('utf-8')}"
+        )
         return None
+
 
 def read_existing_data(file_path):
     """
@@ -1012,7 +1316,7 @@ def read_existing_data(file_path):
     """
     data = {}
     if os.path.exists(file_path):
-        with open(file_path, 'r') as f:
+        with open(file_path, "r") as f:
             for line in f:
                 parts = line.strip().split()
                 if len(parts) >= 2:
@@ -1021,13 +1325,15 @@ def read_existing_data(file_path):
                     data[repo_name] = commit_hash
     return data
 
+
 def write_data(file_path, data):
     """
     Writes the data (a dict of repo names to commit hashes) to the file.
     """
-    with open(file_path, 'w') as f:
+    with open(file_path, "w") as f:
         for repo, commit in data.items():
             f.write(f"{repo} {commit}\n")
+
 
 def copy_resource(install_dir):
     target_dir = "resource"
@@ -1037,7 +1343,13 @@ def copy_resource(install_dir):
         if target_dir in dirs:
 
             source_dir = os.path.join(root, target_dir)
-            dest_dir = os.path.join(g.script_directory, install_dir, 'resource', os.path.basename(root), target_dir)
+            dest_dir = os.path.join(
+                g.script_directory,
+                install_dir,
+                "resource",
+                os.path.basename(root),
+                target_dir,
+            )
 
             for item in os.listdir(source_dir):
                 s = os.path.join(source_dir, item)
@@ -1046,6 +1358,7 @@ def copy_resource(install_dir):
                     shutil.copytree(s, d, dirs_exist_ok=True)
                 else:
                     shutil.copy2(s, d)
+
 
 def copy_installers(src_dir, install_dir) -> int:
     """
@@ -1063,20 +1376,20 @@ def copy_installers(src_dir, install_dir) -> int:
         The number of installer scripts successfully copied.
     """
     script_dir = Path(g.script_directory).expanduser().resolve()
-    dst_root   = script_dir / install_dir
+    dst_root = script_dir / install_dir
     src_root = Path(g.script_directory) / src_dir
 
     copied = 0
-    if not src_root.is_dir(): # not building from source
+    if not src_root.is_dir():  # not building from source
         return
         # raise FileNotFoundError(f"{src_root} does not exist")
 
     for child in src_root.iterdir():
         if not child.is_dir():
-            continue                      # skip non-directories
+            continue  # skip non-directories
         src_installer = child / "install_dependencies.sh"
         if not src_installer.is_file():
-            continue                      # nothing to copy in this subdir
+            continue  # nothing to copy in this subdir
 
         dst_subdir = dst_root / "dependencies" / child.name
         dst_subdir.mkdir(parents=True, exist_ok=True)
@@ -1104,17 +1417,28 @@ def deploy_install_packages():
     # Create a glob pattern to find all build directories for the current system
     # e.g., .../release/install/*/linux/x86_64/*
     source_pattern = os.path.join(
-        g.script_directory, 'release', 'install', '*', g.os_type, g.os_version, g.architecture, '*'
+        g.script_directory,
+        "release",
+        "install",
+        "*",
+        g.os_type,
+        g.os_version,
+        g.architecture,
+        "*",
     )
 
     # Find all source directories that match
     found_source_dirs = glob.glob(source_pattern)
 
     if not found_source_dirs:
-        print(f"🤷 No installed packages found for the current system ({g.os_type}/{g.os_version}/{g.architecture}).")
+        print(
+            f"🤷 No installed packages found for the current system ({g.os_type}/{g.os_version}/{g.architecture})."
+        )
         return
 
-    print(f"🚀 Deploying installed packages for system: {g.os_type}/{g.os_version}/{g.architecture}")
+    print(
+        f"🚀 Deploying installed packages for system: {g.os_type}/{g.os_version}/{g.architecture}"
+    )
     deployed_targets = set()
 
     try:
@@ -1122,30 +1446,32 @@ def deploy_install_packages():
             if not os.path.isdir(source_dir):
                 continue
 
-            if os.path.isdir(Path(g.script_directory) / 'src' / Path(source_dir).parts[-5]):
+            if os.path.isdir(
+                Path(g.script_directory) / "src" / Path(source_dir).parts[-5]
+            ):
                 continue
 
             # Use pathlib to easily get the 'target' name from the path
             # The path is .../install/{target}/{os}/{g.os_version}/{arch}/{build_type}
             p = Path(source_dir)
             target_name = p.parents[3].name
-            final_dest_dir = os.path.join(g.script_directory, 'install')
-            generated_dest_dir = os.path.join(g.script_directory, 'generated')
+            final_dest_dir = os.path.join(g.script_directory, "install")
+            generated_dest_dir = os.path.join(g.script_directory, "generated")
 
             # Print the target-specific message only once
             if target_name not in deployed_targets:
                 print(f"  -> Deploying target '{target_name}' to: {final_dest_dir}")
                 deployed_targets.add(target_name)
 
-            release_yaml_path = p / 'release.yaml'
+            release_yaml_path = p / "release.yaml"
             if release_yaml_path.is_file():
                 try:
-                    with open(release_yaml_path, 'r') as f:
+                    with open(release_yaml_path, "r") as f:
                         release_data = yaml.safe_load(f)
                         # Ensure data was loaded and is a dictionary
                         if release_data and isinstance(release_data, dict):
                             # Safely get the list of dependencies, default to empty list
-                            dependencies = release_data.get('g.vcpkg_dependencies', [])
+                            dependencies = release_data.get("g.vcpkg_dependencies", [])
                             if dependencies and isinstance(dependencies, list):
                                 # Use set.update() to add all items from the list
                                 g.vcpkg_dependencies.update(dependencies)
@@ -1154,23 +1480,31 @@ def deploy_install_packages():
                 except IOError as ioe:
                     print(f"    - ⚠️ Warning: Could not read {release_yaml_path}: {ioe}")
 
-
             # Copy contents, merging files from different build_types
             shutil.copytree(source_dir, final_dest_dir, dirs_exist_ok=True)
 
-            if (p / 'generated').is_dir():
-                shutil.copytree(p / 'generated', generated_dest_dir, dirs_exist_ok=True)
+            if (p / "generated").is_dir():
+                shutil.copytree(p / "generated", generated_dest_dir, dirs_exist_ok=True)
 
-            if (p / 'install_dependencies.sh').is_file():
-                os.makedirs(Path(g.script_directory) / 'install/dependencies' / target_name, exist_ok=True)
-                shutil.copy(p / 'install_dependencies.sh',
-                            Path(g.script_directory) / 'install/dependencies' / target_name / 'install_dependencies.sh')
+            if (p / "install_dependencies.sh").is_file():
+                os.makedirs(
+                    Path(g.script_directory) / "install/dependencies" / target_name,
+                    exist_ok=True,
+                )
+                shutil.copy(
+                    p / "install_dependencies.sh",
+                    Path(g.script_directory)
+                    / "install/dependencies"
+                    / target_name
+                    / "install_dependencies.sh",
+                )
 
         if deployed_targets:
             print(f"\n✅ Successfully deployed {deployed_targets} target(s).")
 
     except Exception as e:
         print(f"❌ An error occurred during deployment: {e}")
+
 
 def collect_src_vcpkg_dependencies():
     """
@@ -1183,7 +1517,7 @@ def collect_src_vcpkg_dependencies():
     Returns:
         set: A set containing all unique vcpkg dependency strings found.
     """
-    src_path = Path(g.script_directory) / 'src'
+    src_path = Path(g.script_directory) / "src"
     if not src_path.is_dir():
         print(f"🤷 Source directory not found at: {src_path}")
         return
@@ -1196,21 +1530,23 @@ def collect_src_vcpkg_dependencies():
         if not project_dir.is_dir():
             continue
 
-        release_yaml_path = project_dir / 'release.yaml'
+        release_yaml_path = project_dir / "release.yaml"
 
         # Check if 'release.yaml' exists in the subdirectory
         if release_yaml_path.is_file():
             try:
-                with open(release_yaml_path, 'r') as f:
+                with open(release_yaml_path, "r") as f:
                     release_data = yaml.safe_load(f)
 
                     # Ensure data was loaded and is a dictionary
                     if release_data and isinstance(release_data, dict):
                         # Safely get the list of dependencies, defaulting to an empty list
-                        dependencies = release_data.get('g.vcpkg_dependencies', [])
+                        dependencies = release_data.get("g.vcpkg_dependencies", [])
 
                         if dependencies and isinstance(dependencies, list):
-                            print(f"  -> Found {len(dependencies)} dependencies in '{project_dir.name}'")
+                            print(
+                                f"  -> Found {len(dependencies)} dependencies in '{project_dir.name}'"
+                            )
                             # Merge the found dependencies into the main set
                             g.vcpkg_dependencies.update(dependencies)
 
@@ -1220,6 +1556,7 @@ def collect_src_vcpkg_dependencies():
                 print(f"  -> ⚠️ Error reading file in '{project_dir.name}': {e}")
 
     return
+
 
 def generate_vcpkg_json():
     """
@@ -1272,7 +1609,7 @@ def guard_require_version_bump_for_src_packages():
     → Raise SystemExit with a clear error asking to bump the version.
     """
     script_dir = Path(g.script_directory)
-    src_dir = script_dir / 'src'
+    src_dir = script_dir / "src"
 
     repositories, tokens, user_type, _ = load_configuration()
 
@@ -1283,15 +1620,15 @@ def guard_require_version_bump_for_src_packages():
 
     for pkg_dir in sorted([p for p in src_dir.iterdir() if p.is_dir()]):
         package_name = pkg_dir.name
-        release_yaml = pkg_dir / 'release.yaml'
+        release_yaml = pkg_dir / "release.yaml"
         if not release_yaml.is_file():
             continue
 
         # Local version
         try:
-            with open(release_yaml, 'r') as f:
+            with open(release_yaml, "r") as f:
                 info = yaml.safe_load(f) or {}
-            local_version = 'v' + str(info.get('version', '')).strip()
+            local_version = "v" + str(info.get("version", "")).strip()
             if not local_version:
                 continue  # nothing to compare
         except Exception:
@@ -1302,7 +1639,7 @@ def guard_require_version_bump_for_src_packages():
             continue
         owner, repo = slug
 
-        token = tokens.get(owner) or tokens.get('github.com') or None
+        token = tokens.get(owner) or tokens.get("github.com") or None
         latest = None
         try:
             latest = _get_latest_nonprerelease_release(owner, repo, token)
@@ -1313,19 +1650,23 @@ def guard_require_version_bump_for_src_packages():
         if not latest:
             continue
 
-        latest_tag = (latest.get('tag_name') or '').strip()
+        latest_tag = (latest.get("tag_name") or "").strip()
+
         # Normalize tags in case tags are like "v1.2.3"
         def norm(v):
-            return v[1:] if v.startswith('v') else v
+            return v[1:] if v.startswith("v") else v
+
         if norm(latest_tag) != norm(local_version):
             continue  # versions differ → OK, no guard trips
 
         # Compare commits
-        latest_commit_in_body = _extract_commit_from_body(latest.get('body') or '')
+        latest_commit_in_body = _extract_commit_from_body(latest.get("body") or "")
         local_commit = get_commit_hash(str(pkg_dir))
         dirty = _is_worktree_dirty(str(pkg_dir))
 
-        if (latest_commit_in_body != local_commit) or (latest_commit_in_body == local_commit and dirty):
+        if (latest_commit_in_body != local_commit) or (
+            latest_commit_in_body == local_commit and dirty
+        ):
             # Build a helpful message for this package
             details = []
             details.append(f"version={local_version}")
@@ -1333,14 +1674,16 @@ def guard_require_version_bump_for_src_packages():
             details.append(f"release_commit={latest_commit_in_body or 'N/A'}")
             details.append(f"local_commit={local_commit or 'N/A'}")
             details.append(f"worktree_dirty={dirty}")
-            violations.append({
-                "package": package_name,
-                "version": local_version,
-                "latest_tag": latest_tag,
-                "release_commit": latest_commit_in_body or "N/A",
-                "local_commit": local_commit or "N/A",
-                "dirty": dirty,
-            })
+            violations.append(
+                {
+                    "package": package_name,
+                    "version": local_version,
+                    "latest_tag": latest_tag,
+                    "release_commit": latest_commit_in_body or "N/A",
+                    "local_commit": local_commit or "N/A",
+                    "dirty": dirty,
+                }
+            )
 
     if violations:
         # --- pretty, colored output ---
@@ -1358,9 +1701,17 @@ def guard_require_version_bump_for_src_packages():
             "Please bump the version in:  src/<package>/release.yaml"
         )
 
-        headers = ["PACKAGE", "VERSION", "LATEST TAG", "RELEASE COMMIT", "LOCAL COMMIT", "DIRTY"]
+        headers = [
+            "PACKAGE",
+            "VERSION",
+            "LATEST TAG",
+            "RELEASE COMMIT",
+            "LOCAL COMMIT",
+            "DIRTY",
+        ]
 
-        def w(text): return get_display_width(str(text))
+        def w(text):
+            return get_display_width(str(text))
 
         # compute column widths (use 10-char commit display)
         col_widths = [w(h) for h in headers]
@@ -1385,40 +1736,44 @@ def guard_require_version_bump_for_src_packages():
 
         body_lines = []
         for row in violations:
-            body_lines.append(fmt_row([
-                row["package"],
-                row["version"],
-                row["latest_tag"],
-                short_sha(row["release_commit"]),
-                short_sha(row["local_commit"]),
-                row["dirty"],
-            ]))
+            body_lines.append(
+                fmt_row(
+                    [
+                        row["package"],
+                        row["version"],
+                        row["latest_tag"],
+                        short_sha(row["release_commit"]),
+                        short_sha(row["local_commit"]),
+                        row["dirty"],
+                    ]
+                )
+            )
 
         msg = (
-                f"\n{title}\n"
-                f"{Colors.YELLOW}{subtitle}{RESET}\n\n"
-                f"{header_line}\n{sep}\n" +
-                "\n".join(body_lines) +
-                "\n"
+            f"\n{title}\n"
+            f"{Colors.YELLOW}{subtitle}{RESET}\n\n"
+            f"{header_line}\n{sep}\n" + "\n".join(body_lines) + "\n"
         )
 
         print(msg)
         sys.exit(1)
 
 
-def setup(package_name = "", build_type = "", build_dir = ""):
+def setup(package_name="", build_type="", build_dir=""):
     """
     setup function to find project directories, msg, and srv files and generate message and service files.
     """
 
     if package_name == "":
-        src_dir = 'src'
-        install_dir = 'install'
+        src_dir = "src"
+        install_dir = "install"
     else:
-        src_dir = 'src/' + package_name
-        install_dir = f'release/install/{package_name}/{g.os_type}/{g.os_version}/{g.architecture}/{build_type}'
+        src_dir = "src/" + package_name
+        install_dir = f"release/install/{package_name}/{g.os_type}/{g.os_version}/{g.architecture}/{build_type}"
 
-    delete_directory(os.path.join(g.script_directory, 'generated'))  # Delete the whole 'include' directory
+    delete_directory(
+        os.path.join(g.script_directory, "generated")
+    )  # Delete the whole 'include' directory
     delete_directory(Path(g.script_directory) / install_dir)
     os.makedirs(Path(g.script_directory) / install_dir, exist_ok=True)
 
@@ -1427,15 +1782,19 @@ def setup(package_name = "", build_type = "", build_dir = ""):
 
     packages_to_ignore = get_packages_to_ignore()
 
-    action_files = find_interface_files(['src'], ['action'], packages_to_ignore)[0]
+    action_files = find_interface_files(["src"], ["action"], packages_to_ignore)[0]
 
-    project_directories = find_project_directories([src_dir], install_dir, packages_to_ignore)
+    project_directories = find_project_directories(
+        [src_dir], install_dir, packages_to_ignore
+    )
 
     # Handle .action files
     for action_file in action_files:
         create_action_file(action_file, Path(action_file).parent.parent, install_dir)
 
-    msg_files, srv_files = find_interface_files(['src', 'temp'], ['msg', 'srv'], packages_to_ignore)
+    msg_files, srv_files = find_interface_files(
+        ["src", "temp"], ["msg", "srv"], packages_to_ignore
+    )
 
     # Handle .msg files
     for msg_file in msg_files:
@@ -1450,15 +1809,17 @@ def setup(package_name = "", build_type = "", build_dir = ""):
 
     copy_installers(src_dir, install_dir)
 
-    if package_name == "": # this means we are not in the release mode
+    if package_name == "":  # this means we are not in the release mode
         copy_resource(install_dir)
 
-    os.makedirs(os.path.join(g.script_directory, 'generated/include'), exist_ok=True)
-    shutil.copy(os.path.join(g.script_directory, 'templates', 'raisin_serialization_base.hpp'),
-                os.path.join(g.script_directory, 'generated/include'))
+    os.makedirs(os.path.join(g.script_directory, "generated/include"), exist_ok=True)
+    shutil.copy(
+        os.path.join(g.script_directory, "templates", "raisin_serialization_base.hpp"),
+        os.path.join(g.script_directory, "generated/include"),
+    )
 
     # create release tag
-    install_release_file = Path(g.script_directory) / 'install' / "release.txt"
+    install_release_file = Path(g.script_directory) / "install" / "release.txt"
 
     # Read existing data if the file already exists.
     existing_data = read_existing_data(install_release_file)
@@ -1489,59 +1850,79 @@ def setup(package_name = "", build_type = "", build_dir = ""):
     print(f"💾 Wrote git hash file: {output_file}")
 
     # copy raisin serialization base
-    src_file = os.path.join(g.script_directory, "templates", "raisin_serialization_base.hpp")
+    src_file = os.path.join(
+        g.script_directory, "templates", "raisin_serialization_base.hpp"
+    )
     dest_dir = os.path.join(g.script_directory, "generated", "include")
 
     os.makedirs(dest_dir, exist_ok=True)  # Ensure destination directory exists
     shutil.copy2(src_file, dest_dir)
 
-    os.makedirs(Path(g.script_directory) / 'install', exist_ok=True)
+    os.makedirs(Path(g.script_directory) / "install", exist_ok=True)
 
     # install generated files
-    shutil.copytree(Path(g.script_directory) / "generated",
-                    Path(g.script_directory) / install_dir / 'generated', dirs_exist_ok=True)
+    shutil.copytree(
+        Path(g.script_directory) / "generated",
+        Path(g.script_directory) / install_dir / "generated",
+        dirs_exist_ok=True,
+    )
 
     deploy_install_packages()
 
-    shutil.copy2(Path(g.script_directory) / 'templates/install_dependencies.sh',
-                 Path(g.script_directory) / 'install/install_dependencies.sh')
+    shutil.copy2(
+        Path(g.script_directory) / "templates/install_dependencies.sh",
+        Path(g.script_directory) / "install/install_dependencies.sh",
+    )
 
     collect_src_vcpkg_dependencies()
     generate_vcpkg_json()
 
-def _repo_slug_from_cfg(package_name: str, repositories: Dict[str, Any]) -> Optional[Tuple[str,str]]:
+
+def _repo_slug_from_cfg(
+    package_name: str, repositories: Dict[str, Any]
+) -> Optional[Tuple[str, str]]:
     """Return (owner, repo) for a package from configuration_setting.yaml or None."""
     info = repositories.get(package_name)
-    if not info or 'url' not in info:
+    if not info or "url" not in info:
         return None
-    m = re.search(r'git@github\.com:(.*?)/(.*?)\.git', info['url'])
+    m = re.search(r"git@github\.com:(.*?)/(.*?)\.git", info["url"])
     if not m:
         return None
     return m.group(1), m.group(2)
 
-def _get_latest_nonprerelease_release(owner: str, repo: str, token: Optional[str]) -> Optional[Dict[str, Any]]:
+
+def _get_latest_nonprerelease_release(
+    owner: str, repo: str, token: Optional[str]
+) -> Optional[Dict[str, Any]]:
     """
     Return the latest *non-prerelease* GitHub release object (dict) or None.
     """
     session = requests.Session()
-    headers = {'Accept': 'application/vnd.github.v3+json'}
+    headers = {"Accept": "application/vnd.github.v3+json"}
     if token:
-        headers['Authorization'] = f'token {token}'
-    resp = session.get(f"https://api.github.com/repos/{owner}/{repo}/releases", headers=headers, timeout=15)
+        headers["Authorization"] = f"token {token}"
+    resp = session.get(
+        f"https://api.github.com/repos/{owner}/{repo}/releases",
+        headers=headers,
+        timeout=15,
+    )
     resp.raise_for_status()
     releases = resp.json()
     # Sort by created_at desc and filter prerelease==False
-    stable = [r for r in releases if not r.get('prerelease')]
+    stable = [r for r in releases if not r.get("prerelease")]
     if not stable:
         return None
+
     # Prefer the greatest semver tag if tags are semantic, else fallback to created_at
     def tag_key(r):
         try:
-            return parse_version(r.get('tag_name') or '0.0.0')
+            return parse_version(r.get("tag_name") or "0.0.0")
         except Exception:
-            return parse_version('0.0.0')
+            return parse_version("0.0.0")
+
     stable.sort(key=tag_key, reverse=True)
     return stable[0]
+
 
 def _extract_commit_from_body(body: str) -> Optional[str]:
     """
@@ -1550,15 +1931,15 @@ def _extract_commit_from_body(body: str) -> Optional[str]:
     if not body:
         return None
     # Prefer full sha-1 first
-    m = re.search(r'\b[0-9a-f]{40}\b', body, re.IGNORECASE)
+    m = re.search(r"\b[0-9a-f]{40}\b", body, re.IGNORECASE)
     if m:
         return m.group(0)
     # else allow short SHAs (>=7 chars)
-    m = re.search(r'\b[0-9a-f]{7,40}\b', body, re.IGNORECASE)
+    m = re.search(r"\b[0-9a-f]{7,40}\b", body, re.IGNORECASE)
     return m.group(0) if m else None
+
 
 def _is_worktree_dirty(repo_path: str) -> bool:
     """True if there are uncommitted changes in repo_path."""
-    out = _run_git_command(['git', 'status', '--porcelain'], repo_path)
+    out = _run_git_command(["git", "status", "--porcelain"], repo_path)
     return bool(out)
-
