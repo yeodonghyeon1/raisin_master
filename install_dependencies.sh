@@ -246,6 +246,6 @@ fi
 python3 ./raisin.py setup
 
 $SUDO bash install/install_dependencies.sh || {
-  echo "Failed to install dependencies: You forgot to call 'python3 ./raisin.py'."
+  echo "Failed to install sub-project dependencies. Please check the output above for errors."
   exit 1
 }
