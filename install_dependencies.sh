@@ -233,6 +233,7 @@ fi
 echo "-------------------------------------------------"
 echo -e "${GREEN}Setup check complete. Now installing dependencies of each packages${NC}"
 
+pip3 install $PIP_FLAGS Click
 python3 ./raisin.py setup
 
 $SUDO bash install/install_dependencies.sh || {
