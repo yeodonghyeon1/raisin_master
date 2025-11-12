@@ -233,7 +233,15 @@ fi
 echo "-------------------------------------------------"
 echo -e "${GREEN}Setup check complete. Now installing dependencies of each packages${NC}"
 
-pip3 install $PIP_FLAGS Click
+# cli dependency pip installation
+pip3 install $PIP_FLAGS Click requests packaging
+
+# change name configuration_setting file
+if [ -f "configuration_setting_example.yaml" ]; then
+    mv configuration_setting_example.yaml configuration_setting.yaml
+fi
+
+# make install/install_dependencies.sh
 python3 ./raisin.py setup
 
 $SUDO bash install/install_dependencies.sh || {
