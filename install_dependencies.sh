@@ -42,6 +42,7 @@ if ! command -v python3 &> /dev/null || ! python3 -m pip --version &> /dev/null;
     if command -v apt-get &> /dev/null; then
         $SUDO apt-get update > /dev/null
         $SUDO apt-get install -y python3 python3-pip
+        $SUDO apt-get install -y lsb-release
         echo -e "${GREEN}✅ Python 3 and pip installed.${NC}"
     else
         echo -e "${RED}❌ apt not found. Please install Python 3 and pip manually.${NC}"
