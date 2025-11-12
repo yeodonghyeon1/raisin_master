@@ -38,14 +38,22 @@ fi
 echo -e "${YELLOW}Checking and installing core Python...${NC}"
 echo "-------------------------------------------------"
 if ! command -v python3 &> /dev/null || ! python3 -m pip --version &> /dev/null; then
-    echo "Python3 or pip not found. installation base Python via apt..."
+    echo "Python3 or pip not found. Attempting installation..."
     if command -v apt-get &> /dev/null; then
-        $SUDO apt-get update
-        $SUDO apt-get install -y python3 python3-pip
-        $SUDO apt-get install -y lsb-release
-        echo -e "${GREEN}✅ Python 3 and pip installed.${NC}"
+        echo "Attempting to install with apt..."
+        $SUDO apt-get update > /dev/null
+        $SUDO apt-get install -y python3 python3-pip lsb-release
+        echo -e "${GREEN}✅ Python 3 and pip installed via apt.${NC}"
+    elif command -v dnf &> /dev/null; then
+        echo "Attempting to install with dnf..."
+        $SUDO dnf install -y python3 python3-pip redhat-lsb-core
+        echo -e "${GREEN}✅ Python 3 and pip installed via dnf.${NC}"
+    elif command -v pacman &> /dev/null; then
+        echo "Attempting to install with pacman..."
+        $SUDO pacman -S --noconfirm python python-pip lsb-release
+        echo -e "${GREEN}✅ Python 3 and pip installed via pacman.${NC}"
     else
-        echo -e "${RED}❌ apt not found. Please install Python 3 and pip manually.${NC}"
+        echo -e "${RED}❌ Could not find a supported package manager (apt, dnf, pacman). Please install Python 3 and pip manually.${NC}"
         exit 1
     fi
 else
