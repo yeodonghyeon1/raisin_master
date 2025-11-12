@@ -35,6 +35,22 @@ if [[ $EUID -eq 0 ]]; then
     PIP_FLAGS="--break-system-packages"
 fi
 
+echo -e "${YELLOW}Checking and installing core Python...${NC}"
+echo "-------------------------------------------------"
+if ! command -v python3 &> /dev/null || ! python3 -m pip --version &> /dev/null; then
+    echo "Python3 or pip not found. installation base Python via apt..."
+    if command -v apt-get &> /dev/null; then
+        $SUDO apt-get update > /dev/null
+        $SUDO apt-get install -y python3 python3-pip
+        echo -e "${GREEN}✅ Python 3 and pip installed.${NC}"
+    else
+        echo -e "${RED}❌ apt not found. Please install Python 3 and pip manually.${NC}"
+        exit 1
+    fi
+else
+    echo -e "${GREEN}✅ Python 3 and pip are already installed.${NC}"
+fi
+
 echo -e "${YELLOW}Checking and installing development tools...${NC}"
 echo "-------------------------------------------------"
 
@@ -217,7 +233,9 @@ fi
 echo "-------------------------------------------------"
 echo -e "${GREEN}Setup check complete. Now installing dependencies of each packages${NC}"
 
-bash install/install_dependencies.sh || {
+python3 ./raisin.py setup
+
+$SUDO bash install/install_dependencies.sh || {
   echo "Failed to install dependencies: You forgot to call 'python3 ./raisin.py'."
   exit 1
 }
