@@ -245,7 +245,4 @@ echo -e "${GREEN}Setup check complete. Now installing dependencies of each packa
 # cli dependency pip installation
 pip3 install $PIP_FLAGS PyYAML Click requests packaging
 
-$SUDO bash install/install_dependencies.sh || {
-  echo "Failed to install sub-project dependencies. Please check the output above for errors."
-  exit 1
-}
+
