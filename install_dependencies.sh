@@ -250,9 +250,6 @@ if [ -f "configuration_setting_example.yaml" ]; then
     cp -n configuration_setting_example.yaml configuration_setting.yaml
 fi
 
-# make install/install_dependencies.sh
-python3 ./raisin.py setup
-
 $SUDO bash install/install_dependencies.sh || {
   echo "Failed to install sub-project dependencies. Please check the output above for errors."
   exit 1
